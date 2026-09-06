@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "lolu13.desknotes",
+  "name": "DeskNotes",
+  "version": "1.0.0",
+  "author": "lolu13",
+  "license": "MIT",
+  "description": "Sticky notes as tiled Hyprland windows, stored in SQLite, drawn by the shell itself",
+  "kinds": ["service", "overlay", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "overlay": "Library.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "DeskNotes",
+    "description": "Left: notes and stack · Middle: new note · Right: stack all",
+    "category": "Productivity",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=DeskNotes
+Comment=Notes that live in your Omarchy shell
+Exec=omarchy-shell shell toggle lolu13.desknotes
+Icon=desknotes-omarchy
+Terminal=false
+Categories=Office;Utility;
+NoDisplay=false
+Actions=NewNote;StackAll;
+
+[Desktop Action NewNote]
+Name=New note
+Exec=omarchy-shell desknotes newNote
+
+[Desktop Action StackAll]
+Name=Stack all notes
+Exec=omarchy-shell desknotes hideAll
