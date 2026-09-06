@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
-"""Run QML regressions through the project's activation-free isolated harness."""
-import json,os,shlex,subprocess,time
+"""Run the QML regression suite offscreen with qmltestrunner.
+
+The runner gets a throwaway XDG_DATA_HOME and no session bus, so nothing it
+does can reach the real shell, portals or notes.
+"""
+import os, shlex, subprocess, sys, tempfile
 from pathlib import Path
 
-ROOT=Path(__file__).resolve().parents[1]
-profile='qml-regression-'+str(time.time_ns())
-folder=ROOT/'.codex-artifacts'/profile;folder.mkdir(parents=True)
-harness=ROOT/'scripts/isolated-app-session.py'
-runner=Path('/usr/lib/qt6/bin/qmltestrunner')
-if not runner.exists():raise SystemExit('Qt 6 qmltestrunner is required for Omarchy QML tests.')
-wrapper=folder/'run.sh';result=folder/'exit-code'
-command=[str(runner),'-input',str(ROOT/'tests'),'-o',str(folder/'results.txt')+',txt']
-wrapper.write_text('#!/bin/sh\nunset WAYLAND_DISPLAY\nexport QT_QPA_PLATFORM=offscreen\nexport QT_QUICK_BACKEND=software\nexport QT_QPA_PLATFORMTHEME=generic\n'+shlex.join(command)+'\nstatus=$?\nprintf "%s\\n" "$status" > '+shlex.quote(str(result))+'\nexit "$status"\n')
-wrapper.chmod(0o755)
-try:
-    subprocess.run(['python3',str(harness),'start',profile,'--binary',str(wrapper)],check=True)
-    session=json.loads((folder/'session.json').read_text())
-    # Any external driver must use the same private session; the QML driver
-    # already inherits these overrides as the harness's child process.
-    driver_env={**os.environ,**session['env']}
-    assert driver_env['DBUS_SESSION_BUS_ADDRESS']==session['bus']
-    assert Path(driver_env['XDG_DATA_HOME']).is_relative_to(folder)
-    deadline=time.monotonic()+120
-    while not result.exists() and time.monotonic()<deadline:time.sleep(.1)
-    if not result.exists():raise RuntimeError('QML regression run timed out; see '+str(folder/'runtime.log'))
-    report=folder/'results.txt'
-    print(report.read_text() if report.exists() else (folder/'runtime.log').read_text())
-    code=int(result.read_text())
-finally:
-    if (folder/'session.json').exists():subprocess.run(['python3',str(harness),'stop',profile],check=True)
+ROOT = Path(__file__).resolve().parents[1]
+runner = Path("/usr/lib/qt6/bin/qmltestrunner")
+if not runner.exists():
+    sys.exit("Qt 6 qmltestrunner is required for the QML tests.")
+with tempfile.TemporaryDirectory(prefix="desknotes-qml-") as tmp:
+    tmp = Path(tmp)
+    report = tmp / "results.txt"
+    env = {
+        "HOME": str(tmp), "XDG_DATA_HOME": str(tmp / "data"), "XDG_CONFIG_HOME": str(tmp / "config"),
+        "XDG_CACHE_HOME": str(tmp / "cache"), "XDG_RUNTIME_DIR": str(tmp / "run"),
+        "DBUS_SESSION_BUS_ADDRESS": "disabled:", "PATH": "/usr/bin",
+        "QT_QPA_PLATFORM": "offscreen", "QT_QUICK_BACKEND": "software", "QT_QPA_PLATFORMTHEME": "generic",
+    }
+    (tmp / "run").mkdir(mode=0o700)
+    cmd = [str(runner), "-input", str(ROOT / "tests"), "-o", f"{report},txt"]
+    code = subprocess.run(cmd, env=env, cwd=tmp, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT).returncode
+    print(report.read_text() if report.exists() else f"{shlex.join(cmd)} produced no report")
 raise SystemExit(code)
