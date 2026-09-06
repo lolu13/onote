@@ -27,7 +27,7 @@ FloatingWindow {
   // The tag lets Hyprland rules and dispatchers target this one window; every
   // Quickshell window shares the class org.quickshell.
   readonly property string tag: windows ? windows.tag(noteId) : "[dn:" + noteId.replace(/-/g, "").slice(0, 12) + "]"
-  title: (localTitle.length ? localTitle : "Untitled") + " — DeskNotes " + tag
+  title: (localTitle.length ? localTitle : "Untitled") + " — Onote " + tag
   minimumSize: Qt.size(320, 240)
   implicitWidth: note ? Math.max(320, Math.round(note.width)) : 320
   implicitHeight: note ? Math.max(240, Math.round(note.height)) : 350
@@ -112,7 +112,7 @@ FloatingWindow {
   readonly property var themePalette: palette
 
   Component.onCompleted: {
-    console.log("desknotes: NoteWindow created for", win.noteId)
+    console.log("onote: NoteWindow created for", win.noteId)
     win.note = win.store ? win.store.noteById(win.noteId) : null
     if (win.note) {
       win.localTitle = win.note.title || ""
@@ -231,7 +231,7 @@ FloatingWindow {
     editor.dirty = false                      // never flush into a tab being deleted
     var next = win.activeTab - 1
     win.store.deleteTab(doomed.id, function(err) {
-      if (err) console.warn("desknotes: deleteTab failed:", err)
+      if (err) console.warn("onote: deleteTab failed:", err)
       win.switchTab(next, true)
     })
   }

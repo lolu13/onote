@@ -1,6 +1,6 @@
 // Long-lived part of the plugin: owns the helper process, the notes cache,
-// the note windows and the "desknotes" IPC target used by keybindings:
-//   omarchy-shell desknotes newNote | newNoteFromClipboard | toggleLibrary | hideAll | restoreAll |
+// the note windows and the "onote" IPC target used by keybindings:
+//   omarchy-shell onote newNote | newNoteFromClipboard | toggleLibrary | hideAll | restoreAll |
 //   pinNote | mirror | mirrorStatus | settings | welcome | status
 import QtQuick
 import Quickshell
@@ -14,7 +14,7 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
-  readonly property string pluginId: (manifest && manifest.id) || "lolu13.desknotes"
+  readonly property string pluginId: (manifest && manifest.id) || "io.github.lolu13.onote"
   readonly property alias store: store
   readonly property alias client: client
 
@@ -24,7 +24,7 @@ Item {
 
   function newNote() {
     store.createNote(function(err, note) {
-      if (err) console.warn("desknotes: newNote failed:", err)
+      if (err) console.warn("onote: newNote failed:", err)
     })
   }
 
@@ -37,7 +37,7 @@ Item {
     h = Math.min(h, mh - 100)
     store._call("ensureWelcomeNote", { force: force === true, x: Math.max(0, mw - w - 24), y: 56, width: w, height: h },
       function(err, note) {
-        if (err) { console.warn("desknotes: welcome note failed:", err); return }
+        if (err) { console.warn("onote: welcome note failed:", err); return }
         if (note) store._put(note)
       })
   }
@@ -51,7 +51,7 @@ Item {
 
   function newNoteFromClipboard() {
     store.createNoteFromClipboard(function(err, note) {
-      if (err) console.warn("desknotes: newNoteFromClipboard failed:", err)
+      if (err) console.warn("onote: newNoteFromClipboard failed:", err)
     })
   }
 
@@ -89,7 +89,7 @@ Item {
   }
 
   IpcHandler {
-    target: "desknotes"
+    target: "onote"
 
     function newNote(): string { service.newNote(); return "ok" }
     function toggleLibrary(): string { service.toggleLibrary(); return "ok" }

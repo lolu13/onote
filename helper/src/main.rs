@@ -1,4 +1,4 @@
-//! desknotes-helper: owns the DeskNotes SQLite database on behalf of the
+//! onote-helper: owns the Onote SQLite database on behalf of the
 //! Omarchy shell plugin. Long-lived; speaks JSON lines over stdio; exits when
 //! stdin closes. Schema, migrations, validation and the FTS index are the
 //! Tauri edition's `db.rs`, compiled in by path (see src/db.rs).
@@ -23,7 +23,7 @@ const DEFAULT_CONTENT: &str = r#"[{"type":"text","content":""}]"#;
 fn db_path() -> PathBuf {
     // Test and development override; only an absolute path is honoured and the
     // same private-directory rules apply to it.
-    if let Some(p) = std::env::var_os("DESKNOTES_DB").map(PathBuf::from).filter(|p| p.is_absolute()) {
+    if let Some(p) = std::env::var_os("ONOTE_DB").map(PathBuf::from).filter(|p| p.is_absolute()) {
         return p;
     }
     let data_home = std::env::var_os("XDG_DATA_HOME")
@@ -55,17 +55,17 @@ fn prepare_private_db(path: &std::path::Path) -> Result<(), String> {
 fn main() {
     let path = db_path();
     if let Err(e) = prepare_private_db(&path) {
-        eprintln!("desknotes-helper: {e}");
+        eprintln!("onote-helper: {e}");
         std::process::exit(2);
     }
     let db = match Database::new(&path) {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("desknotes-helper: cannot open {}: {e}", path.display());
+            eprintln!("onote-helper: cannot open {}: {e}", path.display());
             std::process::exit(2);
         }
     };
-    eprintln!("desknotes-helper: ready on {}", path.display());
+    eprintln!("onote-helper: ready on {}", path.display());
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -419,14 +419,14 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
             Ok(json!(text.len()))
         }
 
-        // Save one note as Markdown into ~/Documents/DeskNotes (or `dir`); returns
+        // Save one note as Markdown into ~/Documents/Onote (or `dir`); returns
         // the path. Never replaces a file: an occupied name gets " (2)", " (3)", …
         "exportNote" => {
             let note = db.get_note(arg_str(&req, "noteId")?)?.ok_or("Note not found")?;
             let tabs = db.tabs_for(&note.id)?;
             let dir = match req.args.get("dir").and_then(Value::as_str) {
                 Some(d) if !d.trim().is_empty() => mirror::expand_home(d.trim()),
-                _ => mirror::home().join("Documents").join("DeskNotes"),
+                _ => mirror::home().join("Documents").join("Onote"),
             };
             fsutil::ensure_owned_dir(&dir)?;
             let stem = mirror::safe_file_stem(&note.title, &note.id);

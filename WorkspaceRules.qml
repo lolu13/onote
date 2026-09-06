@@ -98,9 +98,9 @@ Item {
     rules._busy = false
     var err = rules._err.trim()
     if (rules._errBytes > rules.maxErrBytes) err += " …(" + rules._errBytes + " bytes)"
-    if (err.length) console.warn("desknotes: workspace rule:", err)
+    if (err.length) console.warn("onote: workspace rule:", err)
     rules._err = ""
-    if (code !== 0) console.warn("desknotes: hyprctl eval exited", code, "- notes open on the current workspace")
+    if (code !== 0) console.warn("onote: hyprctl eval exited", code, "- notes open on the current workspace")
     rules.placed(ids)
     rules._pump()
   }
@@ -108,7 +108,7 @@ Item {
   Timer {
     id: deadline
     interval: 10000
-    onTriggered: { if (proc.running) { console.warn("desknotes: hyprctl eval timed out"); proc.signal(15); killTimer.start() } }
+    onTriggered: { if (proc.running) { console.warn("onote: hyprctl eval timed out"); proc.signal(15); killTimer.start() } }
   }
   Timer {
     id: killTimer

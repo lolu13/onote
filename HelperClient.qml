@@ -1,4 +1,4 @@
-// Owns the desknotes-helper process and the request/response bookkeeping.
+// Owns the onote-helper process and the request/response bookkeeping.
 // One JSON object per line each way; every request carries an id that the
 // helper echoes back, so replies can be matched to callbacks.
 import QtQuick
@@ -8,7 +8,7 @@ import Quickshell.Io
 Item {
   id: client
 
-  property string helperPath: Quickshell.env("HOME") + "/.local/bin/desknotes-helper"
+  property string helperPath: Quickshell.env("HOME") + "/.local/bin/onote-helper"
   property bool ready: false
   property string lastError: ""
   property int restarts: 0
@@ -37,7 +37,7 @@ Item {
     if (!line || !line.length) return
     var resp
     try { resp = JSON.parse(line) } catch (e) {
-      console.warn("desknotes: unparsable helper line:", line.slice(0, 200))
+      console.warn("onote: unparsable helper line:", line.slice(0, 200))
       return
     }
     var cb = client._pending[resp.id]
@@ -51,7 +51,7 @@ Item {
     var pending = client._pending
     client._pending = ({})
     for (var id in pending) {
-      try { pending[id](reason, null) } catch (e) { console.warn("desknotes: callback threw:", e) }
+      try { pending[id](reason, null) } catch (e) { console.warn("onote: callback threw:", e) }
     }
   }
 
@@ -71,7 +71,7 @@ Item {
     if (client._buf.length > client.maxLineBytes) {
       client._buf = ""
       client.lastError = "helper reply exceeded " + client.maxLineBytes + " bytes"
-      console.warn("desknotes:", client.lastError)
+      console.warn("onote:", client.lastError)
       proc.signal(9)
       return
     }
@@ -107,7 +107,7 @@ Item {
       onRead: function(line) {
         if (!line.length) return
         if (line.length > 4096) line = line.slice(0, 4096) + "…"
-        console.log("desknotes-helper:", line)
+        console.log("onote-helper:", line)
         if (!client.ready && line.indexOf("ready on") !== -1) {
           client.ready = true
           client.restarts = 0
@@ -125,7 +125,7 @@ Item {
       client.died(reason)
       if (client.restarts >= client.maxRestarts) {
         client.lastError = reason + "; giving up after " + client.restarts + " restarts"
-        console.warn("desknotes:", client.lastError)
+        console.warn("onote:", client.lastError)
         return
       }
       restartTimer.interval = 1000 * Math.pow(2, client.restarts)

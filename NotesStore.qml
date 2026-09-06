@@ -190,7 +190,7 @@ Item {
     store.client.request(op, args, function(err, result) {
       if (err) {
         store.helperError = op + ": " + err
-        console.warn("desknotes:", store.helperError)
+        console.warn("onote:", store.helperError)
       }
       if (cb) cb(err, result)
     })
@@ -204,7 +204,7 @@ Item {
       store.notes = next
       store._rebuild()
       store._loadTabs(function(eT) {
-        if (eT) console.warn("desknotes: listTabs failed:", eT)
+        if (eT) console.warn("onote: listTabs failed:", eT)
         // Edits that waited out a helper restart go now.
         if (Object.keys(store._dirty).length || Object.keys(store._dirtyTabs).length) store.flush()
       })

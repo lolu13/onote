@@ -5,7 +5,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "lolu13.desknotes"
+  moduleName: "io.github.lolu13.onote"
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -14,14 +14,14 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "󰎞"
-    tooltipText: "DeskNotes · Left: notes & stack · Middle: new note · Right: stack all"
+    tooltipText: "Onote · Left: notes & stack · Middle: new note · Right: stack all"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton)
-        Quickshell.execDetached(["/usr/bin/omarchy-shell", "desknotes", "newNote"])
+        Quickshell.execDetached(["/usr/bin/omarchy-shell", "onote", "newNote"])
       else if (mouseButton === Qt.RightButton)
-        Quickshell.execDetached(["/usr/bin/omarchy-shell", "desknotes", "hideAll"])
+        Quickshell.execDetached(["/usr/bin/omarchy-shell", "onote", "hideAll"])
       else
-        Quickshell.execDetached(["/usr/bin/omarchy-shell", "shell", "toggle", "lolu13.desknotes"])
+        Quickshell.execDetached(["/usr/bin/omarchy-shell", "shell", "toggle", "io.github.lolu13.onote"])
     }
   }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the DeskNotes Omarchy shell plugin and its database helper.
+"""Install the Onote shell plugin and its database helper.
 
 Replaces the earlier Tauri-based app on this machine: its binary, desktop entry
 and icon are backed up and removed. The notes database is never touched.
@@ -19,12 +19,12 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-PLUGIN_ID = "lolu13.desknotes"
+PLUGIN_ID = "io.github.lolu13.onote"
 PLUGIN_SRC = ROOT  # the repository root is the plugin: manifest.json sits here
-HELPER_DEFAULT = ROOT / "helper/target/release/desknotes-helper"
+HELPER_DEFAULT = ROOT / "helper/target/release/onote-helper"
 # Not needed by the shell; kept out of the installed copy.
 PLUGIN_SKIP = {".git", ".codex-artifacts", "__pycache__", "target"}
-SOURCE_LINE = 'dofile((os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/hypr/desknotes.lua")'
+SOURCE_LINE = 'dofile((os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/hypr/onote.lua")'
 
 
 def run(*args, check=True):
@@ -36,7 +36,7 @@ def run(*args, check=True):
 
 def copy_plugin(dest: Path):
     """Copy the plugin directory verbatim (the shell rejects symlinks)."""
-    stage = dest.with_name(dest.name + ".desknotes-install")
+    stage = dest.with_name(dest.name + ".onote-install")
     if stage.exists():
         shutil.rmtree(stage)
     shutil.copytree(PLUGIN_SRC, stage, ignore=lambda d, names: [n for n in names if n in PLUGIN_SKIP])
@@ -51,7 +51,7 @@ def restart_shell():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--helper", type=Path, default=HELPER_DEFAULT, help="built desknotes-helper binary")
+    parser.add_argument("--helper", type=Path, default=HELPER_DEFAULT, help="built onote-helper binary")
     parser.add_argument("--no-shortcuts", action="store_true", help="install the window rule but no Super keybindings")
     parser.add_argument("--sync", action="store_true", help="only copy plugin files and restart the shell (development)")
     args = parser.parse_args()
@@ -80,10 +80,10 @@ def main():
         wanted = {(64, "N"), (72, "N"), (72, "H")}
         for binding in json.loads(run("hyprctl", "binds", "-j")):
             key = (binding["modmask"], binding["key"].upper())
-            if key in wanted and not binding.get("description", "").startswith("DeskNotes:"):
+            if key in wanted and not binding.get("description", "").startswith("Onote:"):
                 parser.error(f"Shortcut already used: {binding.get('description', key)}. Use --no-shortcuts or choose your own bindings.")
 
-    backup = state / "desknotes-omarchy/install-backups" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup = state / "onote/install-backups" / datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     backup.mkdir(parents=True)
     originals = {}
 
@@ -129,14 +129,14 @@ def main():
 
     # 1. Hyprland rule + bindings, validated with rollback.
     bindings = config / "hypr/bindings.lua"
-    lua = (ROOT / "hypr/desknotes.lua").read_text()
+    lua = (ROOT / "hypr/onote.lua").read_text()
     if args.no_shortcuts:
         lua = "\n".join(line for line in lua.splitlines() if not line.startswith("o.bind(")) + "\n"
     existing = bindings.read_text() if bindings.exists() else ""
     try:
-        write(config / "hypr/desknotes.lua", lua)
+        write(config / "hypr/onote.lua", lua)
         if SOURCE_LINE not in existing:
-            write(bindings, existing + "\n-- DeskNotes Omarchy\n" + SOURCE_LINE + "\n")
+            write(bindings, existing + "\n-- Onote\n" + SOURCE_LINE + "\n")
         run("hyprctl", "reload")
         errors = run("hyprctl", "configerrors")
         if errors:
@@ -166,9 +166,9 @@ def main():
     retire(data / "applications/desknotes-omarchy.desktop")
 
     # 3. Helper, plugin, launcher entry, icon.
-    write(home / ".local/bin/desknotes-helper", source=args.helper, executable=True)
-    write(data / "applications/desknotes.desktop", (ROOT / "desknotes.desktop").read_text())
-    write(data / "icons/hicolor/128x128/apps/desknotes-omarchy.png", source=ROOT / "icons/desknotes-omarchy.png")
+    write(home / ".local/bin/onote-helper", source=args.helper, executable=True)
+    write(data / "applications/onote.desktop", (ROOT / "onote.desktop").read_text())
+    write(data / "icons/hicolor/128x128/apps/onote.png", source=ROOT / "icons/onote.png")
     shell_config = config / "omarchy/shell.json"
     if shell_config.exists():
         shutil.copy2(shell_config, backup / "shell.json")
@@ -186,7 +186,7 @@ def main():
     restart_shell()
 
     (backup / "paths.json").write_text(json.dumps([str(p) for p in originals], indent=2))
-    print(f"Installed the DeskNotes shell plugin. Backups: {backup}")
+    print(f"Installed the Onote shell plugin. Backups: {backup}")
     print("Open the library: Super+N, or the bar button, or: omarchy-shell shell toggle " + PLUGIN_ID)
     if not args.no_shortcuts:
         print("Super+N: notes and stack; Super+Alt+N: new note; Super+Alt+H: stack all")

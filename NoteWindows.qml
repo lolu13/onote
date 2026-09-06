@@ -31,7 +31,7 @@ Item {
 
   Variants {
     id: variants
-    onModelChanged: console.log("desknotes: window model =", JSON.stringify(model))
+    onModelChanged: console.log("onote: window model =", JSON.stringify(model))
     model: {
       var ids = root._openIds()
       var shown = []
@@ -125,14 +125,14 @@ Item {
 
   function focusNote(noteId) {
     var sel = root._selector(noteId)
-    if (!sel) { console.warn("desknotes: no window of ours for note", rules.shortId(noteId)); return }
+    if (!sel) { console.warn("onote: no window of ours for note", rules.shortId(noteId)); return }
     Quickshell.execDetached(["/usr/bin/hyprctl", "dispatch",
       'hl.dsp.focus({ window = "' + sel + '" })'])
   }
 
   function setPinned(noteId, on, width, height) {
     var sel = root._selector(noteId)
-    if (!sel) { console.warn("desknotes: no window of ours for note", rules.shortId(noteId)); return }
+    if (!sel) { console.warn("onote: no window of ours for note", rules.shortId(noteId)); return }
     var script = rules.pinScript(sel, on, width, height)
     if (!script.length) return
     Quickshell.execDetached(["/usr/bin/hyprctl", "eval", script])

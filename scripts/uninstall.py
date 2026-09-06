@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remove the DeskNotes Omarchy shell plugin, helper, launcher entry and Hyprland bindings.
+"""Remove the Onote shell plugin, helper, launcher entry and Hyprland bindings.
 
 The notes database (~/.local/share/com.desknotes.omarchy/desknotes.db) is kept.
 """
@@ -8,8 +8,8 @@ from pathlib import Path
 import shutil
 import subprocess
 
-PLUGIN_ID = "lolu13.desknotes"
-SOURCE_LINE = 'dofile((os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/hypr/desknotes.lua")'
+PLUGIN_ID = "io.github.lolu13.onote"
+SOURCE_LINE = 'dofile((os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/hypr/onote.lua")'
 
 
 def run(*args):
@@ -28,20 +28,20 @@ def main():
         print(f"Removed {plugin}")
     run("omarchy-shell", "shell", "rescanPlugins")
 
-    for path in (home / ".local/bin/desknotes-helper", data / "applications/desknotes.desktop",
-                 data / "icons/hicolor/128x128/apps/desknotes-omarchy.png"):
+    for path in (home / ".local/bin/onote-helper", data / "applications/onote.desktop",
+                 data / "icons/hicolor/128x128/apps/onote.png"):
         if path.exists() or path.is_symlink():
             path.unlink()
             print(f"Removed {path}")
 
-    lua = config / "hypr/desknotes.lua"
+    lua = config / "hypr/onote.lua"
     if lua.exists():
         lua.unlink()
         print(f"Removed {lua}")
     bindings = config / "hypr/bindings.lua"
     if bindings.exists():
         text = bindings.read_text()
-        cleaned = text.replace("\n-- DeskNotes Omarchy\n" + SOURCE_LINE + "\n", "\n").replace(SOURCE_LINE + "\n", "")
+        cleaned = text.replace("\n-- Onote\n" + SOURCE_LINE + "\n", "\n").replace(SOURCE_LINE + "\n", "")
         if cleaned != text:
             # Only the marked line goes; the edit is validated by Hyprland and
             # rolled back to the exact prior bytes if it produced an error.
@@ -54,11 +54,11 @@ def main():
                 run("hyprctl", "reload")
                 print(f"Left {bindings} unchanged: Hyprland reported {errors}")
             else:
-                print(f"Removed DeskNotes line from {bindings}")
+                print(f"Removed Onote line from {bindings}")
     run("hyprctl", "reload")
     run("omarchy-restart-shell")
-    print("DeskNotes plugin removed. Kept: the notes database at", data / "com.desknotes.omarchy/desknotes.db",
-          "\n      install backups under ~/.local/state/desknotes-omarchy, Markdown mirror files and exports,",
+    print("Onote plugin removed. Kept: the notes database at", data / "com.desknotes.omarchy/desknotes.db",
+          "\n      install backups under ~/.local/state/onote, Markdown mirror files and exports,",
           "\n      and the bar entry in ~/.config/omarchy/shell.json (remove it from the bar settings).")
 
 

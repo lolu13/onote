@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "id": "lolu13.desknotes",
-  "name": "DeskNotes",
+  "id": "io.github.lolu13.onote",
+  "name": "Onote",
   "version": "1.0.0",
   "author": "lolu13",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "DeskNotes",
+    "displayName": "Onote",
     "description": "Left: notes and stack · Middle: new note · Right: stack all",
     "category": "Productivity",
     "defaultSection": "right",

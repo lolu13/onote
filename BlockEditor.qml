@@ -32,7 +32,7 @@ FocusScope {
     if (blocksModel.count + extra <= editorRoot.maxBlocks) return false
     if (!editorRoot._warnedFull) {
       editorRoot._warnedFull = true
-      console.warn("desknotes: a note holds at most " + editorRoot.maxBlocks + " blocks")
+      console.warn("onote: a note holds at most " + editorRoot.maxBlocks + " blocks")
     }
     return true
   }
@@ -100,7 +100,7 @@ FocusScope {
     try { arr = JSON.parse(json || "[]") } catch (e) { arr = [] }
     if (!Array.isArray(arr) || arr.length === 0) arr = [{ type: "text", content: "" }]
     if (arr.length > editorRoot.maxBlocks) {
-      console.warn("desknotes: note has " + arr.length + " blocks; only the first " + editorRoot.maxBlocks + " are kept")
+      console.warn("onote: note has " + arr.length + " blocks; only the first " + editorRoot.maxBlocks + " are kept")
       arr = arr.slice(0, editorRoot.maxBlocks)
     }
     editorRoot._warnedFull = false
@@ -193,14 +193,14 @@ FocusScope {
       // applying it to whatever now occupies row i. cb(true) so the caller
       // does not paste text into the new content either.
       if (gen !== editorRoot.loadGen || tab !== editorRoot.tabId || note !== editorRoot.noteId) {
-        console.warn("desknotes: image paste dropped, the editor changed content meanwhile")
+        console.warn("onote: image paste dropped, the editor changed content meanwhile")
         cb(true); return
       }
-      if (err) { console.warn("desknotes: image paste refused:", err); cb(true); return }
+      if (err) { console.warn("onote: image paste refused:", err); cb(true); return }
       if (!img || !img.src) { cb(false); return }
       var images = 0
       for (var k = 0; k < blocksModel.count; k++) if (blocksModel.get(k).type === "image") images++
-      if (images >= 20) { console.warn("desknotes: a note holds at most 20 images"); cb(true); return }
+      if (images >= 20) { console.warn("onote: a note holds at most 20 images"); cb(true); return }
       // The image and the text row that follows it are two more blocks.
       if (editorRoot._full(2)) { cb(true); return }
       var at = Math.max(0, Math.min(blocksModel.count - 1, i))

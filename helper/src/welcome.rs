@@ -1,6 +1,6 @@
 //! The note a new user sees first: pinned on every workspace, listing the
 //! most-used keys as label blocks and a short "try it" checklist. Keep in step
-//! with KEYBINDINGS.md and omarchy-plugin/hypr/desknotes.lua.
+//! with KEYBINDINGS.md and omarchy-plugin/hypr/onote.lua.
 use crate::db::Note;
 use serde_json::{json, Value};
 
@@ -40,7 +40,7 @@ pub fn blocks() -> Vec<Value> {
 pub fn note(id: &str) -> Note {
     Note {
         id: id.into(),
-        title: "Welcome to DeskNotes".into(),
+        title: "Welcome to Onote".into(),
         content_blocks: Value::Array(blocks()).to_string(),
         position_x: 40.0,
         position_y: 60.0,
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn welcome_note_is_pinned_and_every_shipped_bind_is_mentioned() {
         let n = note("w");
-        assert!(n.pinned && n.title == "Welcome to DeskNotes");
+        assert!(n.pinned && n.title == "Welcome to Onote");
         let body = n.content_blocks.clone();
         for k in ["Super+N", "Super+Alt+N", "Super+Alt+V", "Super+Alt+P", "Super+Alt+S", "Ctrl+T", "Ctrl+Tab", "Ctrl+Shift+I"] {
             assert!(body.contains(k), "welcome note should mention {k}");

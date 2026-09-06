@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 runner = Path("/usr/lib/qt6/bin/qmltestrunner")
 if not runner.exists():
     sys.exit("Qt 6 qmltestrunner is required for the QML tests.")
-with tempfile.TemporaryDirectory(prefix="desknotes-qml-") as tmp:
+with tempfile.TemporaryDirectory(prefix="onote-qml-") as tmp:
     tmp = Path(tmp)
     report = tmp / "results.txt"
     env = {

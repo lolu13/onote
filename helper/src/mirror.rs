@@ -59,7 +59,7 @@ pub fn safe_file_stem(title: &str, id: &str) -> String {
 /// Mirror file contents: a small front matter block, then the note and its tabs.
 pub fn document(note: &Note, tabs: &[NoteTab]) -> String {
     format!(
-        "---\nid: {}\ncreated: {}\nupdated: {}\nsource: DeskNotes\n---\n\n{}",
+        "---\nid: {}\ncreated: {}\nupdated: {}\nsource: Onote\n---\n\n{}",
         note.id,
         note.created_at,
         note.updated_at,
@@ -139,7 +139,7 @@ fn remove_in(db: &Database, note_id: &str) -> Result<(), String> {
 pub fn sync_note(db: &Database, note_id: &str) {
     let Some(dir) = dir(db) else { return };
     if let Err(e) = sync_note_in(db, &dir, note_id) {
-        eprintln!("desknotes-helper: mirror {note_id}: {e}");
+        eprintln!("onote-helper: mirror {note_id}: {e}");
     }
 }
 
@@ -149,7 +149,7 @@ pub fn remove(db: &Database, note_id: &str) {
         return;
     }
     if let Err(e) = remove_in(db, note_id) {
-        eprintln!("desknotes-helper: mirror remove {note_id}: {e}");
+        eprintln!("onote-helper: mirror remove {note_id}: {e}");
     }
 }
 
@@ -172,7 +172,7 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let d = std::env::temp_dir().join(format!("desknotes-mirror-test-{}-{n}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("onote-mirror-test-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -244,7 +244,7 @@ mod tests {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
         // A document the user already keeps in the vault, plus a stray file at
-        // the fallback name, neither written by DeskNotes.
+        // the fallback name, neither written by Onote.
         std::fs::write(dir.join("Plan.md"), "USER DOCUMENT").unwrap();
         std::fs::write(dir.join("Plan a.md"), "ANOTHER USER DOCUMENT").unwrap();
         db.create_notes(&[note("a", "Plan")]).unwrap();

@@ -20,7 +20,7 @@ Item {
 
   property bool opened: false
   readonly property var store: service ? service.store : null
-  readonly property string pluginId: (manifest && manifest.id) || "lolu13.desknotes"
+  readonly property string pluginId: (manifest && manifest.id) || "io.github.lolu13.onote"
 
   property string filterText: ""
   property int scope: 0                       // 0 all, 1 open, 2 stacked
@@ -320,7 +320,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "desknotes-library"
+    WlrLayershell.namespace: "onote-library"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore

@@ -281,7 +281,7 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("desknotes-fsutil-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
+        let d = std::env::temp_dir().join(format!("onote-fsutil-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

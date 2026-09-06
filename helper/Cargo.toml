@@ -1,12 +1,12 @@
 [package]
-name = "desknotes-helper"
+name = "onote-helper"
 version = "1.0.0"
 edition = "2021"
-description = "Database helper for the DeskNotes Omarchy shell plugin (JSON lines over stdio)"
+description = "Database helper for the Onote shell plugin (JSON lines over stdio)"
 license = "MIT"
 
 [[bin]]
-name = "desknotes-helper"
+name = "onote-helper"
 path = "src/main.rs"
 
 [dependencies]

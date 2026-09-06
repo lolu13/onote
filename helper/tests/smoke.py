@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Protocol smoke test for desknotes-helper.
+"""Protocol smoke test for onote-helper.
 
 Runs against a throwaway copy of a database, never the live one:
-    DESKNOTES_DB=/tmp/dn-test.db python3 tests/smoke.py [path/to/desknotes-helper]
-Without DESKNOTES_DB it creates an empty temp DB.
+    ONOTE_DB=/tmp/dn-test.db python3 tests/smoke.py [path/to/onote-helper]
+Without ONOTE_DB it creates an empty temp DB.
 """
 import json, os, subprocess, sys, tempfile
 
 helper = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-    os.path.dirname(__file__), "..", "target", "release", "desknotes-helper")
-db = os.environ.get("DESKNOTES_DB")
+    os.path.dirname(__file__), "..", "target", "release", "onote-helper")
+db = os.environ.get("ONOTE_DB")
 tmpdir = None
 if not db:
-    tmpdir = tempfile.mkdtemp(prefix="dn-smoke-")
+    tmpdir = tempfile.mkdtemp(prefix="onote-smoke-")
     db = os.path.join(tmpdir, "desknotes.db")
 assert "com.desknotes.omarchy" not in db, "refusing to run against the live database"
 
 p = subprocess.Popen([helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                     env={**os.environ, "DESKNOTES_DB": db}, text=True, bufsize=1)
+                     env={**os.environ, "ONOTE_DB": db}, text=True, bufsize=1)
 _id = 0
 def call(op, **args):
     global _id
@@ -36,7 +36,7 @@ def ok(op, **args):
 assert ok("ping") == "pong"
 before = ok("listNotes")
 w = ok("ensureWelcomeNote", x=800, y=60, width=380, height=560)
-assert w and w["title"] == "Welcome to DeskNotes" and w["pinned"] is True and w["positionX"] == 800, w
+assert w and w["title"] == "Welcome to Onote" and w["pinned"] is True and w["positionX"] == 800, w
 assert ok("ensureWelcomeNote") is None, "only once"
 assert ok("deleteNote", noteId=w["id"]) is True
 assert ok("ensureWelcomeNote") is None, "remembered even after deletion"
@@ -113,7 +113,7 @@ import stat
 assert stat.S_IMODE(os.stat(os.path.dirname(db)).st_mode) == 0o700 or os.path.dirname(db) == tempfile.gettempdir(), oct(os.stat(os.path.dirname(db)).st_mode)
 assert stat.S_IMODE(os.stat(db).st_mode) == 0o600, oct(os.stat(db).st_mode)
 
-with tempfile.TemporaryDirectory(prefix="dn-smoke-") as tmp:
+with tempfile.TemporaryDirectory(prefix="onote-smoke-") as tmp:
     path = ok("exportNote", noteId=note["id"], dir=tmp)
     assert path == os.path.join(tmp, "Smoke test.md") and open(path).read() == md, path
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
@@ -186,7 +186,7 @@ with sqlite3.connect(db) as conn:
         DROP TABLE mirror_files; DROP TABLE tabs_fts; DROP TABLE note_tabs;
         ALTER TABLE notes DROP COLUMN tab_icon; ALTER TABLE notes DROP COLUMN workspace_name;""")
 r = subprocess.run([helper], input='{"id":1,"op":"ping"}\n', text=True, capture_output=True,
-                   env={**os.environ, "DESKNOTES_DB": db})
+                   env={**os.environ, "ONOTE_DB": db})
 assert r.returncode == 0 and '"pong"' in r.stdout, (r.returncode, r.stderr)
 with sqlite3.connect(db) as conn:
     assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 12
