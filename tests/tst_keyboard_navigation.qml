@@ -56,6 +56,16 @@ Item {
       compare(JSON.parse(mock.saved).map(function(b) { return b.content }).join(""), "ABC", "moved back down, the same block")
       compare(editor.focusedIndex, 1)
     }
+    // A move changes no row's height or type and leaves the count alone, so
+    // the layout must be recomputed on the index change, or a tall block
+    // moved above a short one keeps the short one's offset and overlaps.
+    function test_a_moved_block_recomputes_the_layout() {
+      editor.load(JSON.stringify([{type:"text",content:"A"}, {type:"text",content:"L1\nL2\nL3\nL4\nL5"}]))
+      wait(30)
+      var before = editor.blockLayout.positions[1].y
+      editor.moveBlock(1, -1); wait(30)
+      verify(editor.blockLayout.positions[1].y > before, "the short block now sits below the tall one: " + editor.blockLayout.positions[1].y + " > " + before)
+    }
     // Only text-like blocks become to-dos: an image or a label converted
     // would lose its src or badge, with no undo.
     function test_toggle_todo_leaves_images_and_labels_alone() {

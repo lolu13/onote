@@ -36,6 +36,9 @@ Your notes and the database stay where they are; nothing needs migrating.
 - Very large notes (over 5 MB) are refused once with a clear error, not retried forever, and a
   large collection can no longer make the notes list fail to load.
 - A refused delete keeps the note and its unsaved edits.
+- Moving a block up or down (Alt+Up, Alt+Down) no longer leaves blocks drawn over each other.
+- A note closed a moment ago opens again when you pick it in Notes & Stack.
+- Hide All during a reopen no longer makes a later Restore All jump to that note's workspace.
 - The Markdown mirror never overwrites or deletes a file it did not write, handles a folder
   given by two spellings, and forgets its old files when you turn it off.
 - Copy as Markdown (Ctrl+E) reports a failed copy instead of claiming success.

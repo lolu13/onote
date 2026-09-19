@@ -7,6 +7,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Hyprland
+import "Follow.js" as Follow
 
 Item {
   id: root
@@ -15,7 +16,8 @@ Item {
 
   // Both are keyed by note id, so neither carries Object.prototype: an id like
   // "__proto__" must not read back as ready or followed when it was never set.
-  property var follow: Object.create(null)    // noteId -> true: focus the window once Hyprland maps it
+  property var follow: Object.create(null)    // noteId -> reopen token (truthy): focus the window once Hyprland maps it
+  property int _followSeq: 0
   property var _ready: Object.create(null)    // noteId -> true once its workspace rule exists (or none is needed)
   property var _fallback: Object.create(null) // noteId -> true: opened without its rule (hyprctl failed twice)
 
@@ -98,18 +100,19 @@ Item {
   function titleMatches(title, noteId) { return rules.titleMatches(title, noteId) }
 
   // Reopen a stacked note and take the user to it, wherever it lives. A note
-  // already open (a stale row) is focused instead; a failed reopen forgets
-  // the follow, which a window mapping later for any other reason (Restore
-  // All, the helper's return) would otherwise consume with a focus jump.
+  // already open (a stale row) is focused instead; a failed or cancelled
+  // reopen forgets the follow (Follow.js), which a window mapping later for
+  // any other reason (Restore All, the helper's return) would otherwise
+  // consume with a focus jump.
   function openAndFollow(noteId) {
     if (!root.store) return
     var cached = root.store.noteById(noteId)
-    if (cached && cached.piled !== true) { root.focusNote(noteId); return }
-    var f = Object.create(null)
-    for (var k in root.follow) f[k] = true
-    f[noteId] = true
-    root.follow = f
-    root.store.restoreNote(noteId, function(err) { if (err) root.didFollow(noteId) })
+    if (Follow.hasWindow(root.store, cached)) { root.focusNote(noteId); return }
+    var token = ++root._followSeq
+    root.follow = Follow.withMark(root.follow, noteId, token)
+    root.store.restoreNote(noteId, function(err, note) {
+      if (Follow.ended(root.follow, noteId, token, err, note)) root.didFollow(noteId)
+    })
   }
 
   // The tag in a window title is not proof of ownership: any window can put
@@ -183,8 +186,6 @@ Item {
   }
 
   function didFollow(noteId) {
-    var f = Object.create(null)
-    for (var k in root.follow) if (k !== noteId) f[k] = true
-    root.follow = f
+    root.follow = Follow.without(root.follow, noteId)
   }
 }

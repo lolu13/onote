@@ -485,6 +485,8 @@ FocusScope {
           width: editorRoot.columnWidth
           onHeightChanged: layoutTimer.restart()
           onTypeChanged: layoutTimer.restart()
+          // A moved row keeps its height and type, and the count stays: only its index tells.
+          onRowIndexChanged: layoutTimer.restart()
           Component.onCompleted: layoutTimer.restart()
           readonly property var placement: editorRoot.blockLayout.positions[rowIndex] || ({column: 0, y: 0})
           x: placement.column * (editorRoot.columnWidth + editorRoot.columnGap)
