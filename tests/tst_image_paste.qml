@@ -12,7 +12,8 @@ Item {
     property var saved: null
     property var icon: null
     property var notes: ({ note: { id: "note", icon: "data:image/png;base64,AA==" } })
-    function clipboardImage(sources, titleIcon, cb) { icon = titleIcon; reply = cb }
+    property var sources: []
+    function clipboardImage(list, titleIcon, cb) { sources = list; icon = titleIcon; reply = cb }
     function updateTab(id, patch) { saved = { id: id, patch: patch } }
     function updateNote(id, patch) { saved = { id: id, patch: patch } }
   }
@@ -40,6 +41,21 @@ Item {
       compare(imageStore.icon, "", "an emoji icon is no image")
       imageStore.reply(null, null)
       imageStore.notes = { note: { id: "note", icon: "data:image/png;base64,AA==" } }
+    }
+
+    // Blocks past the editor's cap are hidden but saved with the note, so
+    // their images are handed to the budget check like the visible ones.
+    function test_paste_counts_the_images_kept_past_the_block_cap() {
+      var all = []
+      for (var i = 0; i < editor.maxBlocks; i++) all.push({ type: "text", content: "t" + i })
+      all[3] = { type: "image", src: "data:image/png;base64,VISIBLE" }
+      all.push({ type: "image", src: "data:image/png;base64,HIDDEN" }, { type: "text", content: "tail" })
+      editor.load(JSON.stringify(all))
+      editor.pasteImage(0, false, function() {})
+      compare(imageStore.sources.length, 2)
+      verify(imageStore.sources.indexOf("data:image/png;base64,HIDDEN") !== -1, "the hidden image is charged")
+      imageStore.reply(null, null)
+      editor.load('[{"type":"text","content":""}]')
     }
 
     function test_paste_after_tab_switch_is_dropped() {

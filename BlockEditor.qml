@@ -341,6 +341,12 @@ FocusScope {
   function _imageSources() {
     var sources = []
     for (var s = 0; s < blocksModel.count; s++) { var b = blocksModel.get(s); if (b.type === "image" && b.src) sources.push(b.src) }
+    // Blocks past maxBlocks are not shown but are saved with the note: their
+    // images count against the same budget.
+    for (var t = 0; t < editorRoot._tail.length; t++) {
+      var h = editorRoot._tail[t]
+      if (h && h.type === "image" && typeof h.src === "string" && h.src) sources.push(h.src)
+    }
     return sources
   }
 
