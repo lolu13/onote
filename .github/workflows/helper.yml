@@ -1,0 +1,46 @@
+name: helper
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: helper-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  MANIFEST: helper/Cargo.toml
+
+jobs:
+  helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: helper
+
+      # rusqlite uses the "bundled" feature: SQLite is compiled from source by cc,
+      # so only a C toolchain is needed and ubuntu-latest already ships one.
+      - name: Build (release)
+        run: cargo build --release --locked --manifest-path "$MANIFEST"
+
+      - name: Unit tests
+        run: cargo test --locked --manifest-path "$MANIFEST"
+
+      # Protocol smoke test: drives the built binary over stdio against a throwaway
+      # temp database. The clipboard checks inside it are skipped without WAYLAND_DISPLAY.
+      - name: Protocol smoke test
+        run: python3 helper/tests/smoke.py helper/target/release/onote-helper
+
+      - name: Note preview test
+        run: node --test tests/notePreview.test.mjs

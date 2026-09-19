@@ -10,7 +10,9 @@ Item {
     id: imageStore
     property var reply: null
     property var saved: null
-    function clipboardImage(cb) { reply = cb }
+    property var icon: null
+    property var notes: ({ note: { id: "note", icon: "data:image/png;base64,AA==" } })
+    function clipboardImage(sources, titleIcon, cb) { icon = titleIcon; reply = cb }
     function updateTab(id, patch) { saved = { id: id, patch: patch } }
     function updateNote(id, patch) { saved = { id: id, patch: patch } }
   }
@@ -20,6 +22,25 @@ Item {
     name: "ImagePasteTargeting"
     function init() { imageStore.reply = null; imageStore.saved = null; editor.tabId = "first" }
     function blocks() { editor.flush(); return JSON.parse(imageStore.saved.patch.contentBlocks) }
+
+    // The desktop edition charges an image title icon to the note body's
+    // pixel budget; the helper is handed it for the body, never for a tab,
+    // and an emoji icon is not an image.
+    function test_paste_hands_the_helper_the_notes_image_icon_for_the_body_only() {
+      editor.load('[{"type":"text","content":""}]')
+      editor.pasteImage(0, true, function() {})
+      compare(imageStore.icon, "", "a tab paste carries no icon")
+      imageStore.reply(null, null)
+      editor.tabId = ""
+      editor.pasteImage(0, true, function() {})
+      compare(imageStore.icon, "data:image/png;base64,AA==", "the body paste carries the icon")
+      imageStore.reply(null, null)
+      imageStore.notes = { note: { id: "note", icon: "\ud83d\ude00" } }
+      editor.pasteImage(0, true, function() {})
+      compare(imageStore.icon, "", "an emoji icon is no image")
+      imageStore.reply(null, null)
+      imageStore.notes = { note: { id: "note", icon: "data:image/png;base64,AA==" } }
+    }
 
     function test_paste_after_tab_switch_is_dropped() {
       editor.load('[{"type":"text","content":""}]')

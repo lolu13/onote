@@ -1,7 +1,7 @@
 // Long-lived part of the plugin: owns the helper process, the notes cache,
 // the note windows and the "onote" IPC target used by keybindings:
 //   omarchy-shell onote newNote | newNoteFromClipboard | toggleLibrary | hideAll | restoreAll |
-//   pinNote | mirror | mirrorStatus | settings | welcome | status
+//   pinNote | mirror | mirrorStatus | settings | welcome | status | update | checkUpdate
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -21,6 +21,26 @@ Item {
   HelperClient { id: client }
   NotesStore { id: store; client: client }
   NoteWindows { id: windows; store: store; service: service }
+
+  // The plugin's own directory, for the update check and the update script.
+  readonly property string pluginDir: {
+    var u = String(Qt.resolvedUrl("."))
+    if (u.indexOf("file://") !== 0) return ""
+    try { return decodeURIComponent(u.slice(7)).replace(/\/$/, "") } catch (e) { return "" }
+  }
+  UpdateCheck { id: updates; pluginDir: service.pluginDir }
+  // Every open note shows a small red square (UpdateBadge) while this is true.
+  readonly property bool updateAvailable: updates.updateAvailable
+
+  // The update itself runs where the user can see it: a floating terminal with
+  // scripts/update.py, where Omarchy's own updater shows the diff and asks.
+  function launchUpdate() {
+    if (!service.pluginDir) return "plugin directory unknown"
+    Quickshell.execDetached(["/usr/bin/uwsm-app", "--", "/usr/bin/xdg-terminal-exec",
+      "--app-id=org.omarchy.terminal", "--title=Onote update", "-e",
+      "/usr/bin/python3", "-I", service.pluginDir + "/scripts/update.py"])
+    return "ok"
+  }
 
   function newNote() {
     store.createNote(function(err, note) {
@@ -84,6 +104,7 @@ Item {
       open: store.openNotes.length,
       stacked: store.stackedNotes.length,
       unsaved: store.unsavedCount,
+      update: updates.summary,
       error: store.helperError || client.lastError || ""
     })
   }
@@ -95,7 +116,8 @@ Item {
     function toggleLibrary(): string { service.toggleLibrary(); return "ok" }
     function settings(): string { service.openSettings(); return "ok" }
     function welcome(): string { service.createWelcome(true); return "ok" }
-    function hideAll(): string { store.stackAll(); return "ok" }
+    function hideNote(): string { return windows.hideFocused() }
+    function hideAll(): string { windows.hideAll(); return "ok" }
     function restoreAll(): string { store.restoreAll(); return "ok" }
     function pinNote(): string { return windows.togglePinFocused() }
     function newNoteFromClipboard(): string { service.newNoteFromClipboard(); return "ok" }
@@ -109,5 +131,7 @@ Item {
     }
     function status(): string { return service.status() }
     function reload(): string { store.reload(); return "ok" }
+    function update(): string { return service.launchUpdate() }
+    function checkUpdate(): string { updates.refresh(); return updates.summary }
   }
 }

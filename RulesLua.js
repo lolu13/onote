@@ -13,8 +13,19 @@ function shortId(noteId) {
   return /^[0-9a-f]{12}$/.test(s) ? s : ""
 }
 function tag(noteId) { return "[dn:" + shortId(noteId) + "]" }
+// The window title is the user's title plus this suffix. The tag is matched
+// only there: a user can type another note's tag (it is visible in every
+// title bar) into a title, and both windows carry the shell's class, so a
+// substring match would pick whichever Hyprland lists first.
+function titleSuffix(noteId) { return " — Onote " + tag(noteId) }
+function titleMatches(title, noteId) {
+  if (!shortId(noteId)) return false
+  var s = titleSuffix(noteId), t = String(title === undefined || title === null ? "" : title)
+  return t.length >= s.length && t.slice(t.length - s.length) === s
+}
 // Lua source for the title regex: the Lua string "\\[" is the regex "\[".
-function titlePattern(noteId) { return ".*\\\\[dn:" + shortId(noteId) + "\\\\].*" }
+// Hyprland matches the whole title, so no trailing ".*": the tag is the end.
+function titlePattern(noteId) { return ".*\\\\[dn:" + shortId(noteId) + "\\\\]" }
 function windowSelector(noteId) { return "title:" + titlePattern(noteId) }
 
 // A finite integer clamped into [lo, hi], else the fallback.

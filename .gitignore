@@ -1,3 +1,8 @@
 helper/target/
 .codex-artifacts/
 __pycache__/
+# Local working files: agent instructions must never ship in the installable tree.
+CLAUDE.md
+AGENTS.md
+CHECKPOINTS.md
+.claude/

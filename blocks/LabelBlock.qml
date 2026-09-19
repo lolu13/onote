@@ -62,6 +62,8 @@ Item {
 
       onTextEdited: if (row) row.setLabel(text)
       Keys.onPressed: function(event) {
+        if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
+        if (event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) { if (row) row.moveFocus(-1); event.accepted = true; return }
         if (event.key === Qt.Key_Tab) { value.focusAt(true); event.accepted = true; return }
         if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
           if (row) row.enter(); event.accepted = true; return
@@ -95,6 +97,7 @@ Item {
     }
     onUpAtStart: if (row) row.moveFocus(-1)
     onDownAtEnd: if (row) row.moveFocus(1)
-    onTabPressed: {}
+    onTabPressed: function(backwards) { if (backwards) block.focusLabel(); else if (row) row.moveFocus(1) }
+    onEdgeRequested: function(last) { if (row) row.focusEdge(last) }
   }
 }

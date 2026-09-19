@@ -1,7 +1,7 @@
 //! onote-helper: owns the Onote SQLite database on behalf of the
 //! Omarchy shell plugin. Long-lived; speaks JSON lines over stdio; exits when
-//! stdin closes. Schema, migrations, validation and the FTS index are the
-//! Tauri edition's `db.rs`, compiled in by path (see src/db.rs).
+//! stdin closes. Schema, migrations, validation and the FTS index live in
+//! `db.rs`.
 mod db;
 mod fsutil;
 mod image;
@@ -116,12 +116,6 @@ fn bounded_setting(db: &Database, key: &str, fallback: f64, min: f64, max: f64) 
         .clamp(min, max)
 }
 
-fn all_notes(db: &Database) -> Result<Vec<Note>, String> {
-    let mut notes = db.get_all_notes()?;
-    notes.extend(db.get_piled_notes()?);
-    Ok(notes)
-}
-
 const CLIPBOARD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 const WL_PASTE: &str = "/usr/bin/wl-paste";
 const WL_COPY: &str = "/usr/bin/wl-copy";
@@ -140,7 +134,7 @@ fn clipboard_text() -> Result<String, String> {
 /// An image from the Wayland clipboard as a `data:` URI block source, or None
 /// when the clipboard holds no image. The byte cap is enforced while reading,
 /// the dimension check refuses anything whose header cannot be read.
-fn clipboard_image() -> Result<Option<Value>, String> {
+fn clipboard_image(sources: &[String], title_icon: Option<&str>) -> Result<Option<Value>, String> {
     let offered = match fsutil::run_bounded(&[WL_PASTE, "-l"], 4096, CLIPBOARD_DEADLINE) {
         fsutil::Bounded::Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         fsutil::Bounded::TimedOut => return Err("Clipboard did not answer".into()),
@@ -156,6 +150,7 @@ fn clipboard_image() -> Result<Option<Value>, String> {
     };
     let (w, h) = image::dimensions(mime, &bytes).ok_or("Image header could not be read")?;
     image::check_dimensions(w, h)?;
+    image::check_note_budget(sources, title_icon, image::charged_pixels(mime, &bytes, w, h)?)?;
     Ok(Some(json!({
         "src": format!("data:{mime};base64,{}", image::base64(&bytes)),
         "mime": mime,
@@ -215,9 +210,12 @@ fn new_note(db: &Database, content_blocks: String) -> Result<Value, String> {
         pinned: false,
         always_on_top: false,
         opacity: 1.0,
-        // None: the window follows the shell's font size.
+        // None: the window follows the shell's font size. The key is Onote's
+        // own: the desktop edition keeps a 15 px default under `defaultFontSize`
+        // in the same database, which would make every new note bigger than
+        // the shell.
         font_size: db
-            .get_setting("defaultFontSize")
+            .get_setting("onote.defaultFontSize")
             .ok()
             .flatten()
             .and_then(|v| v.trim().parse::<f64>().ok())
@@ -238,6 +236,101 @@ fn new_note(db: &Database, content_blocks: String) -> Result<Value, String> {
     note_json(db, &id)
 }
 
+/// Bodies a list reply carries before the remaining ones are left to
+/// per-item fetches: well under the client's 64 MB line limit, even after
+/// JSON escaping.
+const LIST_BODY_BUDGET: usize = 8 * 1024 * 1024;
+
+/// One list row from one note: the preview is taken and the body dropped
+/// before the row is serialized, so a stacked or over-budget note costs its
+/// metadata, never a second copy of its body. The icon (the desktop
+/// edition's, up to 2 MB) goes the same way: dropped for a stacked note
+/// (a restore returns the whole row), charged for an open one and left out
+/// with `iconPending` past the budget, or thirty such notes would put one
+/// reply past the client's line and restart the helper on every load.
+fn list_note_row(mut note: Note, sent: &mut usize, budget: usize) -> Result<Value, String> {
+    let preview = preview::text(&note.content_blocks);
+    let len = note.content_blocks.len();
+    let pending = !note.piled && *sent + len > budget;
+    if note.piled || pending {
+        note.content_blocks = String::new();
+    } else {
+        *sent += len;
+    }
+    let icon_len = note.icon.as_ref().map_or(0, String::len);
+    let icon_pending = !note.piled && icon_len > 0 && *sent + icon_len > budget;
+    if note.piled || icon_pending {
+        note.icon = None;
+    } else {
+        *sent += icon_len;
+    }
+    let mut v = serde_json::to_value(&note).map_err(|e| e.to_string())?;
+    let obj = v.as_object_mut().ok_or("note is not an object")?;
+    obj.insert("preview".into(), json!(preview));
+    if pending {
+        obj.insert("bodyPending".into(), json!(true));
+    }
+    if icon_pending {
+        obj.insert("iconPending".into(), json!(true));
+    }
+    Ok(v)
+}
+
+#[cfg(test)]
+fn list_notes_rows(notes: Vec<Note>, budget: usize) -> Result<Vec<Value>, String> {
+    let mut sent = 0usize;
+    notes.into_iter().map(|n| list_note_row(n, &mut sent, budget)).collect()
+}
+
+/// The notes list straight from the database, one row at a time: the
+/// helper's memory is bounded by one body plus the reply, not by the
+/// collection (fifty stacked screenshot notes are a quarter gigabyte).
+fn list_notes(db: &Database, budget: usize) -> Result<Vec<Value>, String> {
+    let mut sent = 0usize;
+    let mut rows = Vec::new();
+    db.for_each_note(|note| {
+        rows.push(list_note_row(note, &mut sent, budget)?);
+        Ok(())
+    })?;
+    Ok(rows)
+}
+
+/// One list row from one tab: an over-budget body is dropped before the row
+/// is serialized, never copied into the JSON value first.
+fn list_tab_row(mut tab: NoteTab, sent: &mut usize, budget: usize) -> Result<Value, String> {
+    let len = tab.content_blocks.len();
+    let pending = *sent + len > budget;
+    if pending {
+        tab.content_blocks = String::new();
+    } else {
+        *sent += len;
+    }
+    let mut v = serde_json::to_value(&tab).map_err(|e| e.to_string())?;
+    if pending {
+        let obj = v.as_object_mut().ok_or("tab is not an object")?;
+        obj.insert("bodyPending".into(), json!(true));
+    }
+    Ok(v)
+}
+
+/// Rows for tabs already in hand (one note's, from `tabs_for`).
+fn list_tabs_rows(tabs: Vec<NoteTab>, budget: usize) -> Result<Vec<Value>, String> {
+    let mut sent = 0usize;
+    tabs.into_iter().map(|t| list_tab_row(t, &mut sent, budget)).collect()
+}
+
+/// The open notes' tabs straight from the database, one row at a time, like
+/// `list_notes`: the budget bounds the helper's memory, not only the reply.
+fn list_open_tabs(db: &Database, budget: usize) -> Result<Vec<Value>, String> {
+    let mut sent = 0usize;
+    let mut rows = Vec::new();
+    db.for_each_open_tab(|tab| {
+        rows.push(list_tab_row(tab, &mut sent, budget)?);
+        Ok(())
+    })?;
+    Ok(rows)
+}
+
 fn note_json(db: &Database, id: &str) -> Result<Value, String> {
     let note = db.get_note(id)?.ok_or("Note not found")?;
     serde_json::to_value(note).map_err(|e| e.to_string())
@@ -247,21 +340,11 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
     match req.op.as_str() {
         "ping" => Ok(json!("pong")),
 
-        // Open notes travel whole. Stacked notes travel as metadata plus a
-        // bounded plain-text preview: the shell never holds every body at once.
-        "listNotes" => {
-            let mut rows = Vec::new();
-            for note in all_notes(db)? {
-                let mut v = serde_json::to_value(&note).map_err(|e| e.to_string())?;
-                let obj = v.as_object_mut().ok_or("note is not an object")?;
-                obj.insert("preview".into(), json!(preview::text(&note.content_blocks)));
-                if note.piled {
-                    obj.insert("contentBlocks".into(), json!(""));
-                }
-                rows.push(v);
-            }
-            Ok(Value::Array(rows))
-        }
+        // Open notes travel whole, up to a byte budget per reply; the rest are
+        // marked bodyPending and fetched one by one. Stacked notes travel as
+        // metadata plus a bounded plain-text preview: the shell never holds
+        // every body at once, and no reply line can outgrow the client.
+        "listNotes" => Ok(Value::Array(list_notes(db, LIST_BODY_BUDGET)?)),
 
         "getNote" => {
             let id = arg_str(&req, "noteId")?;
@@ -272,12 +355,19 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
 
         "createNoteFromClipboard" => new_note(db, blocks_from_text(&clipboard_text()?)),
 
-        "clipboardImage" => Ok(clipboard_image()?.unwrap_or(Value::Null)),
+        // `sources`: the data URLs already in the note, for its image budget.
+        "clipboardImage" => {
+            let sources: Vec<String> = req.args.get("sources").and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                .unwrap_or_default();
+            let title_icon = req.args.get("titleIcon").and_then(Value::as_str).filter(|s| !s.is_empty());
+            Ok(clipboard_image(&sources, title_icon)?.unwrap_or(Value::Null))
+        }
 
         // First launch: a pinned note with the most-used keys. `force` recreates it.
         "ensureWelcomeNote" => {
             let force = req.args.get("force").and_then(Value::as_bool).unwrap_or(false);
-            let has_notes = !all_notes(db)?.is_empty();
+            let has_notes = db.has_any_note()?;
             let shown = db.get_setting("welcomeCreated")?.as_deref() == Some("1");
             if !force && (has_notes || shown) {
                 return Ok(Value::Null);
@@ -297,7 +387,25 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
 
         "updateNote" => {
             let raw = req.args.get("note").ok_or("missing field 'note'")?;
-            let note: Note = serde_json::from_value(raw.clone()).map_err(|e| format!("bad note: {e}"))?;
+            let mut note: Note = serde_json::from_value(raw.clone()).map_err(|e| format!("bad note: {e}"))?;
+            // Stacking is the helper's (stackNote, stackAll, ...): a content
+            // save carries the row the shell cached, which may say "open"
+            // for a note stacked since, and must not reopen it.
+            if let Some(current) = db.get_note(&note.id)? {
+                note.piled = current.piled;
+                // A row this helper handed out without its body (stacked, or
+                // past the list budget) carries "", never a body the editor
+                // writes; a metadata save on such a row keeps the stored one.
+                if note.content_blocks.is_empty() || raw.get("bodyPending") == Some(&Value::Bool(true)) {
+                    note.content_blocks = current.content_blocks;
+                }
+                // The icon is the desktop edition's; this edition never sets or
+                // clears it, so a row without one (left out of the list past
+                // the budget, or never carried) keeps the stored icon.
+                if note.icon.is_none() {
+                    note.icon = current.icon;
+                }
+            }
             db.update_note(&note)?;
             mirror::sync_note(db, &note.id);
             note_json(db, &note.id)
@@ -305,8 +413,9 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
 
         "deleteNote" => {
             let id = arg_str(&req, "noteId")?;
-            mirror::remove(db, id);
-            db.delete_note(id)?;
+            let mirrored = mirror::pending_removal(db, id);
+            db.delete_note_with_settings(id)?;
+            mirror::finish_removal(mirrored, id);
             Ok(json!(true))
         }
 
@@ -365,7 +474,14 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
             Ok(json!(true))
         }
 
-        "listTabs" => serde_json::to_value(db.list_tabs()?).map_err(|e| e.to_string()),
+        // Like listNotes, bounded: only open notes' tabs travel, within the
+        // byte budget (the rest bodyPending, fetched with getTab). A stacked
+        // note's tabs stay in the database until it is restored (tabsFor).
+        "listTabs" => Ok(Value::Array(list_open_tabs(db, LIST_BODY_BUDGET)?)),
+
+        "tabsFor" => Ok(Value::Array(list_tabs_rows(db.tabs_for(arg_str(&req, "noteId")?)?, LIST_BODY_BUDGET)?)),
+
+        "getTab" => serde_json::to_value(db.get_tab(arg_str(&req, "tabId")?)?).map_err(|e| e.to_string()),
 
         "createTab" => {
             let note_id = arg_str(&req, "noteId")?;
@@ -377,7 +493,13 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
 
         "updateTab" => {
             let raw = req.args.get("tab").ok_or("missing field 'tab'")?;
-            let tab: NoteTab = serde_json::from_value(raw.clone()).map_err(|e| format!("bad tab: {e}"))?;
+            let mut tab: NoteTab = serde_json::from_value(raw.clone()).map_err(|e| format!("bad tab: {e}"))?;
+            // As for a note: a body-less row (bodyPending) never empties the tab.
+            if tab.content_blocks.is_empty() || raw.get("bodyPending") == Some(&Value::Bool(true)) {
+                if let Some(current) = db.get_tab(&tab.id)? {
+                    tab.content_blocks = current.content_blocks;
+                }
+            }
             db.update_tab(&tab)?;
             let saved = db.get_tab(&tab.id)?.ok_or("Tab not found")?;
             mirror::sync_note(db, &saved.note_id);
@@ -398,15 +520,53 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
         "setMirrorDir" => {
             let dir = arg_str(&req, "dir")?.trim().to_string();
             if dir.is_empty() || dir == "off" {
+                // Off leaves the files behind, so the rows that point at them go
+                // too: kept, a later folder would treat them as files to move
+                // and delete the copies the user has since taken over.
                 db.set_setting(mirror::SETTING, "")?;
+                db.clear_mirror_paths()?;
                 return Ok(json!({ "dir": "", "written": 0 }));
             }
-            db.set_setting(mirror::SETTING, &dir)?;
-            match mirror::sync_all(db) {
-                Ok(n) => Ok(json!({ "dir": mirror::expand_home(&dir).to_string_lossy(), "written": n })),
+            // A folder that cannot be used leaves the previous one in place:
+            // a typo must not silently switch a working mirror off.
+            let previous = db.get_setting(mirror::SETTING)?.unwrap_or_default();
+            // Stored in its one canonical spelling: `vault/../vault` or a
+            // symlink to the current folder is the same folder, not a switch.
+            let expanded = mirror::expand_home(&dir);
+            // A bare name would land wherever the shell was started from.
+            if !expanded.is_absolute() {
+                return Err("mirror not enabled: use an absolute folder or ~/…".into());
+            }
+            // Off by any path (the desktop edition's settings reset removes the
+            // key and leaves the rows): a folder the mirror is not in is not
+            // one it is switching from, so its files are left behind.
+            if previous.is_empty() {
+                db.clear_mirror_paths()?;
+            }
+            let switched = crate::fsutil::ensure_owned_dir(&expanded)
+                .and_then(|_| std::fs::canonicalize(&expanded).map_err(|e| format!("{}: {e}", expanded.display())))
+                .and_then(|canonical| {
+                    // The setting is text that `mirror::dir` trims and expands:
+                    // a folder whose real name does not survive that round trip
+                    // (bytes that are not UTF-8, a trailing space) would send
+                    // the mirror somewhere else, so it is refused, not stored.
+                    let stored = canonical
+                        .to_str()
+                        .filter(|s| mirror::expand_home(s.trim()) == canonical)
+                        .map(str::to_owned)
+                        .ok_or_else(|| format!("{}: folder name cannot be stored as typed", canonical.display()))?;
+                    db.set_setting(mirror::SETTING, &stored)?;
+                    mirror::sync_all(db).map(|n| (stored, n))
+                });
+            match switched {
+                Ok((stored, n)) => Ok(json!({ "dir": stored, "written": n })),
                 Err(e) => {
-                    db.set_setting(mirror::SETTING, "")?;
-                    Err(format!("mirror not enabled: {e}"))
+                    db.set_setting(mirror::SETTING, &previous)?;
+                    if previous.is_empty() {
+                        Err(format!("mirror not enabled: {e}"))
+                    } else {
+                        Err(format!("mirror kept on the previous folder: {e}"))
+                    }
                 }
             }
         }
@@ -456,6 +616,82 @@ fn dispatch(db: &Database, req: Request) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_replies_leave_bodies_past_the_budget_pending() {
+        let mut notes = Vec::new();
+        for (i, piled) in [false, false, true, false].iter().enumerate() {
+            let mut n = welcome::note(&format!("n{i}"));
+            n.content_blocks = format!(r#"[{{"type":"text","content":"{}"}}]"#, "x".repeat(10));
+            n.piled = *piled;
+            notes.push(n);
+        }
+        let body_len = notes[0].content_blocks.len();
+        let rows = list_notes_rows(notes, body_len * 2).unwrap();
+        let pending: Vec<bool> = rows.iter().map(|r| r.get("bodyPending").is_some()).collect();
+        assert_eq!(pending, vec![false, false, false, true], "the third is stacked, not pending");
+        assert_eq!(rows[3]["contentBlocks"], "");
+        assert!(rows[3]["preview"].as_str().unwrap().starts_with("xxx"), "a pending note still has its preview");
+        assert_ne!(rows[0]["contentBlocks"], "");
+
+        // Icons go like bodies: dropped for a stacked note, charged for an open
+        // one and left out past the budget.
+        let mut notes = Vec::new();
+        for (i, piled) in [false, true, false].iter().enumerate() {
+            let mut n = welcome::note(&format!("i{i}"));
+            n.content_blocks = "[]".into();
+            n.icon = Some(format!("data:image/png;base64,{}", "A".repeat(100)));
+            n.piled = *piled;
+            notes.push(n);
+        }
+        // Two "[]" bodies and one icon fit; the stacked note's icon is not sent
+        // at all, the third note's is past the budget.
+        let rows = list_notes_rows(notes, 200).unwrap();
+        let pending: Vec<bool> = rows.iter().map(|r| r.get("iconPending").is_some()).collect();
+        assert_eq!(pending, vec![false, false, true], "the third icon is past the budget");
+        assert!(rows[1]["icon"].is_null(), "a stacked note's icon is dropped, not pending");
+        assert!(rows[2]["icon"].is_null());
+        assert!(rows[2].get("bodyPending").is_none(), "an empty body is not pending");
+
+        let tab = |id: &str| NoteTab {
+            id: id.into(), note_id: "n".into(), position: 1, icon: String::new(),
+            content_blocks: "[1234]".into(), created_at: String::new(), updated_at: String::new(),
+        };
+        let rows = list_tabs_rows(vec![tab("a"), tab("b"), tab("c")], 12).unwrap();
+        let pending: Vec<bool> = rows.iter().map(|r| r.get("bodyPending").is_some()).collect();
+        assert_eq!(pending, vec![false, false, true]);
+    }
+
+    // A folder whose real name would not read back as stored (trailing
+    // space, bytes that are not UTF-8) is refused, and the mirror stays
+    // where it was with every file in place.
+    #[test]
+    fn set_mirror_dir_refuses_a_folder_name_that_cannot_round_trip() {
+        use std::os::unix::ffi::OsStrExt;
+        let db = Database::new(std::path::Path::new(":memory:")).unwrap();
+        let root = std::env::temp_dir().join(format!("onote-mirror-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let vault = root.join("vault");
+        std::fs::create_dir_all(&vault).unwrap();
+        let mut note = welcome::note("a");
+        note.title = "Alpha".into();
+        db.create_notes(&[note]).unwrap();
+        let set = |dir: &str| dispatch(&db, serde_json::from_value(json!({ "op": "setMirrorDir", "dir": dir })).unwrap());
+        set(vault.to_str().unwrap()).unwrap();
+        assert!(vault.join("Alpha.md").exists());
+        let spaced = root.join("vault ");
+        let odd = root.join(std::ffi::OsStr::from_bytes(b"vault\xff"));
+        for (target, link) in [(&spaced, root.join("to-spaced")), (&odd, root.join("to-odd"))] {
+            std::fs::create_dir_all(target).unwrap();
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            let err = set(link.to_str().unwrap()).unwrap_err();
+            assert!(err.starts_with("mirror kept on the previous folder") && err.contains("cannot be stored"), "{err}");
+            assert_eq!(db.get_setting(mirror::SETTING).unwrap().as_deref(), vault.to_str(), "setting unchanged");
+            assert!(vault.join("Alpha.md").exists(), "mirror whole");
+            assert_eq!(std::fs::read_dir(target).unwrap().count(), 0, "nothing written elsewhere");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn clipboard_lines_become_text_blocks() {

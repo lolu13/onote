@@ -4,9 +4,24 @@
 //! truth. Best effort: a failing write is logged and never fails the edit.
 use crate::db::{Database, Note, NoteTab};
 use crate::markdown;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+/// The same file under two spellings (`vault` and `vault/../vault`, a
+/// symlinked folder): the old path is then the new file, never to be removed.
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+        _ => false,
+    }
+}
+
 pub const SETTING: &str = "markdownMirrorDir";
+/// Longest file stem in bytes; see `safe_file_stem`.
+const MAX_STEM_BYTES: usize = 190;
 
 pub fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
@@ -47,7 +62,14 @@ pub fn safe_file_stem(title: &str, id: &str) -> String {
         })
         .collect();
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    let cleaned: String = cleaned.chars().take(80).collect();
+    // 80 characters, and at most MAX_STEM_BYTES bytes: the file system counts
+    // bytes (NAME_MAX 255), an emoji is four of them, and the name still has
+    // to carry the longest suffix (" <12 hex>-99.md") and the atomic
+    // temporary's overhead (".<name>.<32 hex>.tmp", 38 bytes): 255 - 38 - 19 = 198.
+    let mut cleaned: String = cleaned.chars().take(80).collect();
+    while cleaned.len() > MAX_STEM_BYTES {
+        cleaned.pop();   // one character, never half of one
+    }
     let cleaned = cleaned.trim().trim_end_matches('.').trim().to_string();
     if cleaned.is_empty() {
         format!("Untitled {}", short_id(id))
@@ -95,7 +117,15 @@ fn allocate_path(db: &Database, dir: &Path, note: &Note) -> Result<PathBuf, Stri
         let path = dir.join(name);
         let key = path.to_string_lossy();
         match db.mirror_path_owner(&key)? {
-            Some(owner) if owner == note.id => return Ok(path),
+            // Our tracked path, as long as what sits there (if anything) is
+            // still our file: the user may have deleted it and put an
+            // unrelated document, or a symlink, under the same name since.
+            Some(owner) if owner == note.id => {
+                if std::fs::symlink_metadata(&path).is_err() || file_belongs_to(&path, &note.id) {
+                    return Ok(path);
+                }
+                continue;
+            }
             Some(_) => continue,
             None => {}
         }
@@ -114,15 +144,18 @@ fn sync_note_in(db: &Database, dir: &Path, note_id: &str) -> Result<(), String> 
     };
     crate::fsutil::ensure_owned_dir(dir)?;
     let path = allocate_path(db, dir, &note)?;
-    if let Some(old) = db.mirror_path(&note.id)? {
+    let old = db.mirror_path(&note.id)?;
+    let tabs = db.tabs_for(&note.id)?;
+    // The renamed file first: a failed write keeps the last good mirror.
+    write_atomic(&path, &document(&note, &tabs))?;
+    db.set_mirror_path(&note.id, &path.to_string_lossy())?;
+    if let Some(old) = old {
         let old = Path::new(&old);
-        if old != path && file_belongs_to(old, &note.id) {
+        if !same_file(old, &path) && file_belongs_to(old, &note.id) {
             let _ = std::fs::remove_file(old);
         }
     }
-    let tabs = db.tabs_for(&note.id)?;
-    write_atomic(&path, &document(&note, &tabs))?;
-    db.set_mirror_path(&note.id, &path.to_string_lossy())
+    Ok(())
 }
 
 fn remove_in(db: &Database, note_id: &str) -> Result<(), String> {
@@ -143,24 +176,79 @@ pub fn sync_note(db: &Database, note_id: &str) {
     }
 }
 
-/// Remove a note's file. Call before deleting the note; the row cascades.
-pub fn remove(db: &Database, note_id: &str) {
-    if dir(db).is_none() {
-        return;
-    }
-    if let Err(e) = remove_in(db, note_id) {
-        eprintln!("onote-helper: mirror remove {note_id}: {e}");
+/// Deleting a note: its file is read up first (the tracking row cascades
+/// with the note) and unlinked only once the note is gone, so a deletion
+/// the database refuses keeps the mirror as it was.
+pub fn pending_removal(db: &Database, note_id: &str) -> Option<PathBuf> {
+    dir(db)?;
+    db.mirror_path(note_id).ok().flatten().map(PathBuf::from)
+}
+
+pub fn finish_removal(path: Option<PathBuf>, note_id: &str) {
+    if let Some(path) = path {
+        if file_belongs_to(&path, note_id) {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
 /// Write every note. Errors are returned here because the user asked for it.
+/// Two phases, so a failure part-way leaves the previous mirror whole: every
+/// file is written first, nothing tracked or deleted yet; only once all of
+/// them exist are the rows moved and the old files removed. On an error the
+/// files this run created are taken back.
 pub fn sync_all(db: &Database) -> Result<usize, String> {
     let Some(dir) = dir(db) else { return Ok(0) };
-    let ids = db.all_note_ids()?;
-    for id in &ids {
-        sync_note_in(db, &dir, id)?;
+    crate::fsutil::ensure_owned_dir(&dir)?;
+    // Ids only: the bodies are not held for the whole run. `existed`: the
+    // destination was a file before this run rewrote it (the note's tracked
+    // file, or its own untracked file reclaimed by front matter after the
+    // mirror was off); a rollback takes back only files this run created.
+    let mut written: Vec<(String, PathBuf, Option<String>, bool)> = Vec::new();
+    let rollback = |written: &[(String, PathBuf, Option<String>, bool)]| {
+        for (_, path, _, existed) in written {
+            if !existed {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    };
+    for id in db.all_note_ids()? {
+        let Some(note) = db.get_note(&id)? else { continue };
+        let old = db.mirror_path(&note.id)?;
+        let result = allocate_path(db, &dir, &note).and_then(|path| {
+            let existed = std::fs::symlink_metadata(&path).is_ok();
+            let tabs = db.tabs_for(&note.id)?;
+            write_atomic(&path, &document(&note, &tabs))?;
+            Ok((path, existed))
+        });
+        match result {
+            Ok((path, existed)) => written.push((note.id, path, old, existed)),
+            Err(e) => {
+                rollback(&written);
+                return Err(e);
+            }
+        }
     }
-    Ok(ids.len())
+    // Every tracking row moves in one transaction; if that fails the new
+    // files are taken back and the old folder is still whole and tracked.
+    let moves: Vec<(String, String)> = written
+        .iter()
+        .map(|(id, path, _, _)| (id.clone(), path.to_string_lossy().into_owned()))
+        .collect();
+    if let Err(e) = db.set_mirror_paths(&moves) {
+        rollback(&written);
+        return Err(e);
+    }
+    // Only now, with the rows moved, do the old files go.
+    for (id, path, old, _) in &written {
+        if let Some(old) = old {
+            let old = Path::new(old);
+            if !same_file(old, path) && file_belongs_to(old, id) {
+                let _ = std::fs::remove_file(old);
+            }
+        }
+    }
+    Ok(written.len())
 }
 
 #[cfg(test)]
@@ -197,6 +285,24 @@ mod tests {
         assert_eq!(safe_file_stem("", "7fb70d54-b3f1-4960-b2ae-e8d858452f0f"), "Untitled 7fb70d54b3f1");
         assert_eq!(safe_file_stem("...", "abc"), "Untitled abc");
         assert_eq!(safe_file_stem(&"x".repeat(200), "a").chars().count(), 80);
+        let emoji = safe_file_stem(&"😀".repeat(80), "a");
+        assert!(emoji.len() <= MAX_STEM_BYTES && emoji.chars().count() == MAX_STEM_BYTES / 4, "{}", emoji.len());
+    }
+
+    // The file system counts bytes: an 80-emoji title (320 bytes) has to
+    // write, temporary name, collision suffix and all.
+    #[test]
+    fn a_title_of_four_byte_characters_writes() {
+        let db = db();
+        let dir = temp_dir();
+        db.create_notes(&[note("a", &"😀".repeat(80)), note("b", &"😀".repeat(80))]).unwrap();
+        db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.iter().all(|n| n.len() <= 255 - 38 && n.ends_with(".md")), "{names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -226,8 +332,10 @@ mod tests {
         sync_note(&db, "a");
         assert!(std::fs::read_to_string(dir.join("Shopping.md")).unwrap().contains("<!-- tab 2 -->"));
 
-        remove(&db, "b");
+        let gone = pending_removal(&db, "b");
+        assert!(dir.join("Groceries b.md").exists(), "nothing is unlinked before the note is gone");
         db.delete_note("b").unwrap();
+        finish_removal(gone, "b");
         assert_eq!(names(), vec!["Shopping.md", "Untitled c.md"]);
 
         db.set_setting(SETTING, "").unwrap();
@@ -235,6 +343,15 @@ mod tests {
         db.update_note(&a).unwrap();
         sync_note(&db, "a");
         assert_eq!(names(), vec!["Shopping.md", "Untitled c.md"], "mirror off leaves files alone");
+        // Off forgets the files (as setMirrorDir does); a later folder does not move them away.
+        db.clear_mirror_paths().unwrap();
+        let other = std::env::temp_dir().join(format!("onote-mirror-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        db.set_setting(SETTING, other.to_str().unwrap()).unwrap();
+        sync_all(&db).unwrap();
+        assert_eq!(names(), vec!["Shopping.md", "Untitled c.md"], "left behind, not moved");
+        assert!(other.join("Ignored while off.md").exists(), "written afresh under the current title");
+        let _ = std::fs::remove_dir_all(&other);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -257,8 +374,9 @@ mod tests {
         assert_eq!(db.mirror_path("a").unwrap().as_deref(), own.to_str());
 
         // Deleting the note removes only its own file.
-        remove(&db, "a");
+        let gone = pending_removal(&db, "a");
         db.delete_note("a").unwrap();
+        finish_removal(gone, "a");
         assert!(!own.exists());
         assert!(dir.join("Plan.md").exists() && dir.join("Plan a.md").exists());
 
@@ -271,6 +389,195 @@ mod tests {
         let mut v: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         v.sort();
         assert_eq!(v, vec!["Notes.md", "Plan a.md", "Plan.md"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Off then on in the same folder: the rows are gone, the files are not.
+    // A run that rewrites them and then fails takes back only the files it
+    // created; the rewritten ones existed before it and stay.
+    #[test]
+    fn a_failed_run_keeps_the_files_it_only_rewrote() {
+        let db = db();
+        let dir = temp_dir();
+        db.create_notes(&[note("a", "Alpha"), note("b", "Beta")]).unwrap();
+        db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        db.clear_mirror_paths().unwrap();   // the mirror was switched off
+        // A later note (created after the others) finds every name taken by
+        // the user's own documents, so the run fails after Alpha and Beta.
+        db.create_notes(&[note("g", "Gamma")]).unwrap();
+        db.execute_for_tests("UPDATE notes SET created_at = '2999-01-01 00:00:00' WHERE id = 'g'");
+        let (stem, short) = (safe_file_stem("Gamma", "g"), short_id("g"));
+        std::fs::write(dir.join(format!("{stem}.md")), "USER").unwrap();
+        std::fs::write(dir.join(format!("{stem} {short}.md")), "USER").unwrap();
+        for n in 2..100 {
+            std::fs::write(dir.join(format!("{stem} {short}-{n}.md")), "USER").unwrap();
+        }
+        assert!(sync_all(&db).unwrap_err().contains("no free mirror file name"));
+        assert!(dir.join("Alpha.md").exists(), "rewritten, not created: kept on rollback");
+        assert!(dir.join("Beta.md").exists());
+        assert!(file_belongs_to(&dir.join("Alpha.md"), "a"));
+        // The same failure on a fresh folder leaves nothing behind.
+        let fresh = temp_dir();
+        db.set_setting(SETTING, fresh.to_str().unwrap()).unwrap();
+        db.clear_mirror_paths().unwrap();
+        std::fs::create_dir_all(&fresh).unwrap();
+        std::fs::write(fresh.join(format!("{stem}.md")), "USER").unwrap();
+        std::fs::write(fresh.join(format!("{stem} {short}.md")), "USER").unwrap();
+        for n in 2..100 {
+            std::fs::write(fresh.join(format!("{stem} {short}-{n}.md")), "USER").unwrap();
+        }
+        assert!(sync_all(&db).is_err());
+        assert!(!fresh.join("Alpha.md").exists(), "created by the failed run: taken back");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh);
+    }
+
+    // A tracked path is trusted only while our file is still there: a
+    // user document (or a symlink) dropped under the same name after ours
+    // was deleted is never overwritten; the note moves to the next name.
+    #[test]
+    fn tracked_path_taken_by_a_foreign_file_is_not_overwritten() {
+        let db = db();
+        let dir = temp_dir();
+        db.create_notes(&[note("a", "Plan")]).unwrap();
+        db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
+        sync_note(&db, "a");
+        let own = dir.join("Plan.md");
+        assert_eq!(db.mirror_path("a").unwrap().as_deref(), own.to_str());
+        std::fs::remove_file(&own).unwrap();
+        std::fs::write(&own, "USER DOCUMENT").unwrap();
+        sync_note(&db, "a");
+        assert_eq!(std::fs::read_to_string(&own).unwrap(), "USER DOCUMENT", "left alone");
+        let moved = dir.join("Plan a.md");
+        assert!(std::fs::read_to_string(&moved).unwrap().starts_with("---\nid: a\n"));
+        assert_eq!(db.mirror_path("a").unwrap().as_deref(), moved.to_str());
+
+        // A symlink planted at the tracked path reaches nothing either.
+        std::fs::remove_file(&moved).unwrap();
+        let target = dir.join("target.md");
+        std::fs::write(&target, "TARGET").unwrap();
+        std::os::unix::fs::symlink(&target, &moved).unwrap();
+        sync_note(&db, "a");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "TARGET");
+        assert!(std::fs::symlink_metadata(&moved).unwrap().file_type().is_symlink(), "the link stays as it was");
+        assert!(std::fs::read_to_string(dir.join("Plan a-2.md")).unwrap().starts_with("---\nid: a\n"));
+
+        // A mirror file the user deleted is simply written again at its path.
+        db.create_notes(&[note("b", "Beta")]).unwrap();
+        sync_note(&db, "b");
+        std::fs::remove_file(dir.join("Beta.md")).unwrap();
+        sync_note(&db, "b");
+        assert!(dir.join("Beta.md").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Switching folders writes every new file before any old one goes, so a
+    // failure on the last note leaves the old folder complete and untracked
+    // new files gone.
+    #[test]
+    fn failed_folder_switch_leaves_the_previous_mirror_whole() {
+        let db = db();
+        let old_dir = temp_dir();
+        let new_dir = temp_dir();
+        db.create_notes(&[note("a", "Alpha"), note("b", "Beta")]).unwrap();
+        db.set_setting(SETTING, old_dir.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        // Every name Beta could take in the new folder is a foreign file.
+        std::fs::create_dir_all(&new_dir).unwrap();
+        std::fs::write(new_dir.join("Beta.md"), "USER").unwrap();
+        let short = short_id("b");
+        std::fs::write(new_dir.join(format!("Beta {short}.md")), "USER").unwrap();
+        for n in 2..100 {
+            std::fs::write(new_dir.join(format!("Beta {short}-{n}.md")), "USER").unwrap();
+        }
+        db.set_setting(SETTING, new_dir.to_str().unwrap()).unwrap();
+        let err = sync_all(&db).unwrap_err();
+        assert!(err.contains("no free mirror file name"), "{err}");
+        assert!(old_dir.join("Alpha.md").exists() && old_dir.join("Beta.md").exists(), "old folder untouched");
+        assert!(!new_dir.join("Alpha.md").exists(), "the file written before the failure is taken back");
+        assert_eq!(db.mirror_path("a").unwrap().as_deref(), old_dir.join("Alpha.md").to_str());
+        assert_eq!(std::fs::read_dir(&new_dir).unwrap().count(), 100, "foreign files untouched");
+        let _ = std::fs::remove_dir_all(&old_dir);
+        let _ = std::fs::remove_dir_all(&new_dir);
+    }
+
+    // The row moves are one transaction: a database failure on the last
+    // note leaves every row in the old folder, no old file deleted, and the
+    // new files taken back.
+    #[test]
+    fn failed_row_move_leaves_the_previous_mirror_whole() {
+        let db = db();
+        let old_dir = temp_dir();
+        let new_dir = temp_dir();
+        db.create_notes(&[note("a", "Alpha"), note("b", "Beta")]).unwrap();
+        db.set_setting(SETTING, old_dir.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        db.execute_for_tests(
+            "CREATE TRIGGER reject_move BEFORE UPDATE OF path ON mirror_files
+             WHEN new.note_id='b' BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
+        );
+        db.set_setting(SETTING, new_dir.to_str().unwrap()).unwrap();
+        let err = sync_all(&db).unwrap_err();
+        assert!(err.contains("test failure"), "{err}");
+        assert!(old_dir.join("Alpha.md").exists() && old_dir.join("Beta.md").exists(), "old folder whole");
+        assert_eq!(db.mirror_path("a").unwrap().as_deref(), old_dir.join("Alpha.md").to_str(), "no row moved");
+        assert_eq!(db.mirror_path("b").unwrap().as_deref(), old_dir.join("Beta.md").to_str());
+        assert!(!new_dir.exists() || std::fs::read_dir(&new_dir).unwrap().count() == 0, "new files taken back");
+        let _ = std::fs::remove_dir_all(&old_dir);
+        let _ = std::fs::remove_dir_all(&new_dir);
+    }
+
+    // Rows tracked through an alias (an older install stored the folder as
+    // typed) and the canonical folder applied over them: a failed row move
+    // takes back only new files, and the rewritten files are the old ones.
+    #[test]
+    fn failed_row_move_over_aliased_rows_keeps_the_files() {
+        let db = db();
+        let dir = temp_dir();
+        let link = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        db.create_notes(&[note("a", "Alpha"), note("b", "Beta")]).unwrap();
+        db.set_setting(SETTING, link.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        assert_eq!(db.mirror_path("a").unwrap().as_deref(), link.join("Alpha.md").to_str(), "tracked through the alias");
+        db.execute_for_tests(
+            "CREATE TRIGGER reject_move BEFORE UPDATE OF path ON mirror_files
+             BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
+        );
+        db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
+        let err = sync_all(&db).unwrap_err();
+        assert!(err.contains("test failure"), "{err}");
+        assert!(dir.join("Alpha.md").exists() && dir.join("Beta.md").exists(), "the mirror is still whole");
+        assert_eq!(db.mirror_path("a").unwrap().as_deref(), link.join("Alpha.md").to_str(), "no row moved");
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The same folder under another spelling (`..`, a symlink) is a switch
+    // to itself: the files are rewritten in place, none removed.
+    #[test]
+    fn switching_to_an_alias_of_the_same_folder_keeps_every_file() {
+        let db = db();
+        let dir = temp_dir();
+        db.create_notes(&[note("a", "Alpha"), note("b", "Beta")]).unwrap();
+        db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        let name = dir.file_name().unwrap().to_owned();
+        let alias = dir.join("..").join(&name);
+        db.set_setting(SETTING, alias.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        assert!(dir.join("Alpha.md").exists() && dir.join("Beta.md").exists(), "nothing removed through the old spelling");
+        let link = temp_dir();
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        db.set_setting(SETTING, link.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        assert!(dir.join("Alpha.md").exists() && dir.join("Beta.md").exists(), "nor through a symlink");
+        db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
+        assert_eq!(sync_all(&db).unwrap(), 2);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -297,7 +604,9 @@ mod tests {
         // A symlink planted at the tracked path later is not followed on removal.
         std::fs::remove_file(&own).unwrap();
         std::os::unix::fs::symlink(&victim, &own).unwrap();
-        remove(&db, "a");
+        let gone = pending_removal(&db, "a");
+        db.delete_note("a").unwrap();
+        finish_removal(gone, "a");
         assert!(victim.exists() && std::fs::symlink_metadata(&own).is_ok(), "the planted link and its target survive");
         let _ = std::fs::remove_dir_all(&dir);
     }

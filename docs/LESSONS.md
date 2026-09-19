@@ -1,0 +1,97 @@
+# Onote lessons learned
+
+Rules paid for with real bugs. Read before changing the area they cover; add a line when a bug teaches a new one.
+
+- Treat note closure as a save-and-stack operation; unregister the note before backend closure so native close interception cannot recurse.
+- Disable the X11 global-hotkey registrar on Wayland and expose single-instance commands for compositor shortcuts.
+- Let the compositor own tiled geometry; never restore raw physical resize-event dimensions as logical builder dimensions.
+- Resolve installed executable paths explicitly in compositor and bar commands; their environment may differ from an interactive terminal.
+- Avoid continuously animated masked/filtered frames in Linux note webviews; use an optional static accent frame and measure the complete process tree.
+- Never start a throwaway `dbus-daemon --session` / `dbus-run-session` for isolated app tests: a stock session bus auto-launches xdg-desktop-portal(-hyprland), xdg-document-portal and the at-spi broker on the private bus, xdph segfaults when the bus dies (upstream #330) and the document portal steals the real session's `/run/user/UID/doc` mount. Give a test instance no bus at all instead: `DBUS_SESSION_BUS_ADDRESS=disabled:` (never unset, libdbus may autolaunch one), as `scripts/test-workspace-rules.py` does.
+- Bound every resync payload, not only the notes list: tab bodies of stacked notes stay in the database (`listTabs` skips them) and are fetched before the note is restored, never lazily after a window could save an empty body.
+- Forget a record's client-side markers (dirty, in flight, settings) only after the helper acknowledges the deletion; a failed delete must leave the editor on the record with its edits.
+- When an editor caps what it renders, keep the unrendered tail verbatim and re-append it on save; a cap must never become a truncating write to shared storage.
+- Carry every persisted field of a shared block format through the model, including ones this editor cannot show (`manualWidth`, `labelWidth`); rebuilding JSON from a subset erases the other edition's data.
+- A setting that is validated by trying it (a mirror folder) is restored to its previous value on failure, not blanked.
+- Each edition's export must include every table the other edition writes for the same note (`note_tabs`), validated with the same budgets as note bodies and restored in the same transaction.
+- Every list reply from the helper must have a byte budget with per-item fetches for the rest; a per-item cap does not bound the list, and a client that kills on oversized lines then never starts.
+- Switching a mirrored folder is two-phase: write every new file, then move rows and delete old files; never delete an old copy before all new ones exist.
+- QML `Image` with `PreserveAspectFit` and a `sourceSize.width` upscales the decode to that width; use `Image.Stretch` (shrink-only) and keep the aspect ratio in the item size.
+- Apply a search LIMIT to distinct notes (`GROUP BY note_id`), never to child rows that are deduplicated afterwards.
+- Lifecycle fields the helper owns (`piled`) are never taken from a content save; copy the stored value onto the incoming row so a save queued behind a bulk stack cannot undo it.
+- Delete a note's derived files after the database row is gone, reading their paths first; deleting them before a refused row deletion loses the derived copy.
+- Every Hyprland toplevel lookup by title must also require the shell's window class; the tag is visible text any window can carry.
+- Every helper reply that can carry bodies (lists and per-note fetches alike) uses the body budget; a per-note `tabsFor` without it can make one note impossible to reopen.
+- A reload is complete only when every part it needs arrived; declaring `ready` after a failed part lets one-shot restores (the remembered tab) fire against nothing.
+- No irreversible action on one keystroke: a "fast" variant preselects the confirm button, it never skips the dialog.
+- A shared editor component intercepts a key only for the blocks that answer its signal; an unanswered intercepted key is a swallowed keystroke.
+- When a QML claim about decoding or layout is disputed, settle it with a qmltestrunner test that measures the result (`tst_image_decode.qml`), not by reading Qt docs.
+- A tracking table says where a file was, not what is there now: revalidate ownership (front matter) before any overwrite, and take the next name when a foreign file sits at the tracked path.
+- Flush a debounced write before the delete that purges its target; a flush triggered by the deletion's own signal otherwise recreates the purged row.
+- What a reload deliberately leaves out of the cache (stacked bodies, stacked tabs) must also be evicted by the operation that creates that state, or the invariant holds only until the next reload.
+- Two loads that run side by side are joined before the result is announced; announcing after one of them lets one-shot consumers act on the other's missing data.
+- Bookkeeping for a multi-file move goes in one transaction before any old file is deleted; per-item row moves interleaved with deletes cannot be rolled back.
+- An operation that reads the database after "flush" waits for the acknowledgement and checks for a refused or unsendable write; flush only queues.
+- Writes keyed by a record id are refused while that record's deletion is in flight and after it; ordered requests otherwise let a late write outlive the purge.
+- A folder setting is stored canonicalized, and "old file != new file" is decided by file identity (device, inode), never by comparing path strings, in the rollback paths as much as the happy path; an alias of the same folder otherwise deletes what was just written.
+- A list reply must not replace a value whose write is still in flight, not only one whose write failed: record sends, not just errors, for settings as for notes.
+- A path stored as a text setting must round-trip through the reader (trim, `~` expansion, UTF-8) to the same path, or it is refused; a lossy or trimmed spelling sends the next write to a different folder and deletes from the intended one.
+- A tool's verdict is its exit code; its stdout may be empty on every path (omarchy-plugin-validate prints only to stderr), so a check on output text is no check.
+- A confirmation dialog pins the record it asks about (by id) when it opens, and acts on that record or nothing; the selection it was opened from can move underneath it (async list rebuilds, hover).
+- A close that the compositor already performed is undone on a refused write: the row is still open, so the window must come back with the reason, or an "open" note has no window to focus.
+- A generated file name is bounded in bytes, not characters, with the longest suffix and the atomic temporary's overhead subtracted from NAME_MAX; a character cap lets a four-byte title exceed it.
+- A placement that fell back (the rule was not registered) is carried to the window as a fact; a window that does not know it fell back records the fallback as the user's choice.
+- A script that empties its destination proves the destination first: resolved, outside its own repository, and marked as the intended target; a default path is no guard against a mistyped argument.
+- Every branch of a joined load fails the load the same way; a branch that "does not matter" still feeds a control (theme cycle) that persists a decision made on its missing data.
+- A coordinate is stored in the frame it will be replayed in: Hyprland reports window positions compositor-global and takes rule positions monitor-relative, and the monitor's offset is subtracted at the store, not added at the replay.
+- A cached row edited locally is announced (`noteChanged`), and a derived field the helper computed from the old body (`preview`) goes with the edit; a list built once on open otherwise shows the pre-edit row that the open itself flushed.
+- A list reply's byte budget bounds the reply, not the process: rows are visited one at a time and reduced before the next is read, or the budget is cosmetic.
+- Concurrent runs of a multi-step load that share trackers are serialized (one at a time, a request meanwhile runs after), or each run scopes every tracker it touches.
+- Every string an import accepts is bounded at import, including the ones only the other edition reads; a field outside the body budget still rides every list reply.
+- A budget the other edition applies over a whole note (pixels across images) is applied here before the write, with the stored images handed to the checker; a per-item check lets a note past the other edition's export.
+- A repair that changes what the user is looking at (the fallback after a deleted tab) is remembered like a choice; only a restoration of what was saved stays silent.
+- A streaming fix applies to every list of the same shape in the same change (`listNotes` and `listTabs`); a sibling list left collecting its rows keeps the memory bug the budget was meant to end.
+- Bounding the decode (`sourceSize`) bounds memory, not the painted item: a valid 1×8192 image kept at ratio paints millions of pixels tall. Decide the painted height first, under a cap, and derive the width from the ratio.
+- Every check the other edition runs over an image on export (animation frames, pixels over frames) runs here at paste, or a note this edition accepts is one the other cannot back up; a canvas check is not the whole validator.
+- Liveness of a process another process started is read from `/proc/<pid>/stat`, where a zombie is `Z`; a signal-0 probe answers for the dead until a parent we are not reaps them, and a reviewer's sandbox is such a parent.
+- Turning a mirror off forgets its tracking rows (files untouched): rows say which files the next folder may move away, and a folder the mirror left is not one it is moving from. A test whose later steps reuse a folder asserts on that folder, or a deletion there passes unnoticed.
+- A generated identifier is matched where it is generated (the exact title suffix), never as a substring: the user's part of the title can carry any text, including another record's identifier.
+- A fence around user text is longer than any run of the fence character inside it; a fixed fence is a delimiter the content can spell.
+- The other edition's budget takes every input the other edition gives it (the title icon), not only the ones this edition can show.
+- A rollback takes back what the run created, decided per destination before the write (did a file exist there?), never inferred from bookkeeping the run itself may have reset.
+- Feeding a process is a success when every byte was accepted, decided by waiting for the write, never by a deadline that ran out; a deadline is for the exit, after the input is in.
+- A live check script is run after every change to what it calls; one left failing for days checks nothing and looks like a test.
+- Every fetch that installs rows later (a reload's list, a restore's `tabsFor`) records what was acknowledged after it was asked and lets that win; one path without the tracker is the one that writes the old body back.
+- A marker consumed by a later event (`follow`, consumed by a window mapping) is released on every path where that event will not come, or it fires on the next unrelated one.
+- Editor state held as a row index (the picker, the focused index) is reset or re-pointed by everything that renumbers rows (load, move); an index left pointing at another block is a write to that block.
+- A conversion that drops fields (to-do from anything) is limited to the types that have nothing to drop; there is no undo.
+- A row the helper hands out without its body ("" or `bodyPending`) is never a body to store; the last line of defence against an emptying write is in the writer, not only in the caller's timing.
+- A folder setting is absolute or `~/…`; a bare name lands wherever the process was started from.
+- A shared database is shared bookkeeping: a "reset" or "delete" in one edition keeps or cascades the keys the other edition owns, and the other edition's mirror rows are stale the moment the setting they belong to is gone.
+- Markdown blocks are separated by what CommonMark needs between them (a blank line before `---`, one after a list), not by what the editor's rows look like.
+- A script that empties a folder proves it is the intended one by identity (manifest id, remote), not by shape (a git root is every project).
+- A shell rescan is asynchronous: poll the list until the id appears, as Omarchy's own tools do; a stage the shell can see is a plugin the shell will load.
+- An update badge compares three things, origin, the checkout and what was built and installed from it; two of them agreeing says nothing about the third.
+- Every field that rides in a list row is charged to the reply budget, including the ones this edition never shows (the desktop's icon); a field left out of a row is marked pending and fetched whole, and a save from a row without it keeps the stored value.
+- A bulk delete purges what the per-item delete purges; the per-item path being right does not make the bulk path right.
+- A child row's change is the parent's change where the parent's timestamp is what readers see (front matter, ordering).
+- A test process that needs no bus gets an unparseable bus address, not an unset one; unset can autolaunch the throwaway bus.
+- A rule about which keys another edition owns lives in one predicate used by every write path (delete, replace, merge); a delete that keeps them and a loop that writes them is no rule.
+- Every machine-local placement field is reset on import together (display, pin, z-order, workspace); a new field added to the row is added to that reset.
+- A "migrate the old location" finding is checked against history first: whether the old location ever existed for a released build (tags, releases, the file's own log), not against what the base config would have produced.
+- A "use the harness" finding is checked by what the process actually does (watch the bus it is offered); a runner that needs no bus gets none, and a harness that launches the app is not isolation for a test that does not use the app.
+- A "stale after resync" finding needs a writer other than the window showing the row; with one edition on the database, a reload returns what that window wrote.
+
+- An optimistic UI change is safe only while nothing has been sent for that record; once a write may have landed, show the persisted state until the newer operation completes, and void the earlier write's reply and retry when it does.
+- A "not found" reply for a lifecycle write means the row is gone: remove the cached record, do not just drop the marker, or a rebuild reopens a deleted note.
+- A lifecycle change that takes more than one round trip (reopen = tabsFor, bodies, unstackNote) carries a per-record generation and abandons itself when a newer stack, hide or delete bumps it; otherwise its last request undoes the newer action.
+- A per-record guard set by a multi-step operation carries that operation's generation; an older run ending must not clear the guard a newer run owns.
+- A bulk operation drops, on success, only the pending entries it covered when it was sent, never the ones queued behind it; and a bulk cancel keeps entries whose write may already have landed until the helper confirms the new state.
+- When a bulk write is confirmed, the cached rows it covered change with it; leaving them to the follow-up reload shows the old state in between and forever if that reload fails.
+- A superseded operation whose write reached the disk is remembered, and installed when the superseding one is refused; "stale, ignore" is right only while something newer will settle the row.
+- A remembered write is settled by re-reading the store, never by replaying the operation: the replay carries the operation's side effects (a cancelled close) into a present that has moved on; and a read settles only what was recorded before it was asked for.
+- A hold or guard placed by one call of an operation carries that call's token; a refused older call releases only what it placed, and overlapping calls of the same operation are the case to test, not only different operations.
+- A deferred fallback records a fact about the disk ("open now"), never a snapshot of content: the cache may have acknowledged newer edits by the time the fallback applies, and a snapshot would write them back out of date.
+- A fallback that shows a note open goes through the same reopen path as the user's action (tabs, body, unstack): a shortcut that flips a flag on a cached row exposes whatever that row lacks.
+- A bulk write covers its pending entries the way a single write does: they are attempted from the moment the request goes out, whatever reply comes back.
+- A bulk write's confirmation updates every row it covered; the bookkeeping entry it also clears is a separate question, and its absence says nothing about the disk.
