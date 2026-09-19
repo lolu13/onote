@@ -40,6 +40,24 @@ Item {
       store._rebuild()
     }
 
+    // An explicit hide keeps the window until the helper answers. Keystrokes
+    // typed meanwhile live only in the editor: the store asks for them
+    // (noteStacked) before it drops the stacked note's tabs, or the editor's
+    // own flush would reach a tab the store no longer knows and be ignored.
+    function test_keystrokes_typed_while_a_hide_is_in_flight_survive_the_eviction() {
+      store.tabs = { n: [{ id: "t", noteId: "n", position: 1, icon: "", contentBlocks: "old tab" }] }
+      store._tabNote = { t: "n" }
+      var typed = function(id) { if (id === "n") store.updateTab("t", { contentBlocks: "typed late" }) }
+      store.noteStacked.connect(typed)
+      store.stackNote("n")
+      client.answer("stackNote", null, { id: "n", title: "", contentBlocks: "original", piled: true, updatedAt: "2" })
+      store.noteStacked.disconnect(typed)
+      compare(store._tabNote.t, "n", "the unsaved tab is still indexed")
+      compare(store.tabsFor("n")[0].contentBlocks, "typed late")
+      store.flush()
+      compare(client.next("updateTab").args.tab.contentBlocks, "typed late", "and is written")
+    }
+
     function test_failed_save_stays_pending_and_survives_stacking() {
       store.updateNote("n", { contentBlocks: "unsaved" })
       compare(store.unsavedCount, 1)

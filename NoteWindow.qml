@@ -253,6 +253,7 @@ FloatingWindow {
 
   Connections {
     target: win.store
+    function onNoteStacked(id) { if (id === win.noteId) { options.flushTitle(); editor.flush() } }
     function onNoteTabsChanged(id) { if (id === win.noteId) win.refreshTabs() }
     function onResynced() { win.refreshTabs(); win.restoreTab() }
   }

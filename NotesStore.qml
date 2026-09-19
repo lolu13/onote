@@ -24,6 +24,7 @@ Item {
   signal noteRemoved(string id)
   signal resynced()
   signal noteTabsChanged(string noteId)
+  signal noteStacked(string id)            // stacked on disk, about to drop its body and tabs: flush editors now
   signal saveRefusalChanged(string id)   // a note or tab was refused as over 5 MB, or saved again
 
   // Save bookkeeping. A note (or tab) is "unsaved" while it is dirty (edited,
@@ -678,6 +679,10 @@ Item {
   function _evictStacked(id) {
     var note = store.notes[id]
     if (!note || note.piled !== true || store._restoring[id]) return
+    // The note's window may still be up (an explicit hide keeps it until this
+    // reply) with keystrokes typed since its last flush: it hands them over
+    // now, while the tabs are still indexed, so they count as unsaved below.
+    store.noteStacked(id)
     if (!store._unsaved(id) && note.contentBlocks) {
       var slim = ({}); for (var f in note) slim[f] = note[f]
       if (typeof slim.preview !== "string") slim.preview = NotePreview.text(slim.contentBlocks)
