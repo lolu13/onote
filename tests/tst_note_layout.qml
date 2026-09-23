@@ -26,4 +26,11 @@ TestCase {
     compare(NoteLayout.hintShown(available, fixed, 15, 7, 14, false), true)
     compare(NoteLayout.editorHeight(available, fixed, 15, true, 7), available - fixed - 15 - 28)
   }
+
+  // 320 wide at 32px text: a 264px row; full labels about 118 and 141 wide.
+  function test_the_toolbar_goes_compact_when_the_full_labels_do_not_fit() {
+    compare(NoteLayout.toolbarCompact(264, 118, 141, 8, 40), true)
+    compare(NoteLayout.toolbarCompact(264, 43, 66, 8, 40), false, "the compact buttons fit")
+    compare(NoteLayout.toolbarCompact(298, 70, 90, 8, 40), false, "full labels at 14px text")
+  }
 }

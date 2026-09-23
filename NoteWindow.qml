@@ -533,6 +533,10 @@ FloatingWindow {
         width: parent.width
         height: Math.round(win.fontSize * 1.8)
         spacing: 8
+        // Full-label widths, measured whichever labels are showing.
+        TextMetrics { id: lockFull; font: lockLabel.font; text: options.titleLocked ? "\uf023 Locked" : "\uf09c Lock" }
+        TextMetrics { id: columnsFull; font: layoutLabel.font; text: options.columns + (options.columns === 1 ? " column" : " columns") }
+        readonly property bool compact: NoteLayout.toolbarCompact(width, lockFull.advanceWidth + 16, columnsFull.advanceWidth + 16, spacing, 40)
         TextInput {
           id: titleField
           width: Math.max(40, parent.width - titleLock.width - layoutButton.width - parent.spacing * 2)
@@ -581,7 +585,7 @@ FloatingWindow {
           color: options.titleLocked ? win.themePalette.accentPrimary : win.themePalette.currentLine
           Text {
             id: lockLabel; anchors.centerIn: parent
-            text: options.titleLocked ? "\uf023 Locked" : "\uf09c Lock"
+            text: titleBar.compact ? (options.titleLocked ? "\uf023" : "\uf09c") : lockFull.text
             font.family: win.fontFamily; font.pixelSize: Math.round(win.fontSize * 0.85)
             color: options.titleLocked ? win.themePalette.background : win.themePalette.foreground
           }
@@ -598,7 +602,7 @@ FloatingWindow {
           color: win.themePalette.currentLine
           Text {
             id: layoutLabel; anchors.centerIn: parent
-            text: options.columns + (options.columns === 1 ? " column" : " columns")
+            text: titleBar.compact ? "\uf0db " + options.columns : columnsFull.text
             font.family: win.fontFamily; font.pixelSize: Math.round(win.fontSize * 0.85)
             color: win.themePalette.foreground
           }
