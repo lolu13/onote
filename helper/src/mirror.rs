@@ -196,19 +196,21 @@ pub fn finish_removal(path: Option<PathBuf>, note_id: &str) {
 /// Two phases, so a failure part-way leaves the previous mirror whole: every
 /// file is written first, nothing tracked or deleted yet; only once all of
 /// them exist are the rows moved and the old files removed. On an error the
-/// files this run created are taken back.
+/// files this run created are taken back and the ones it rewrote get their
+/// previous contents back.
 pub fn sync_all(db: &Database) -> Result<usize, String> {
     let Some(dir) = dir(db) else { return Ok(0) };
     crate::fsutil::ensure_owned_dir(&dir)?;
-    // Ids only: the bodies are not held for the whole run. `existed`: the
-    // destination was a file before this run rewrote it (the note's tracked
-    // file, or its own untracked file reclaimed by front matter after the
-    // mirror was off); a rollback takes back only files this run created.
-    let mut written: Vec<(String, PathBuf, Option<String>, bool)> = Vec::new();
-    let rollback = |written: &[(String, PathBuf, Option<String>, bool)]| {
-        for (_, path, _, existed) in written {
-            if !existed {
-                let _ = std::fs::remove_file(path);
+    // Ids only: the bodies are not held for the whole run. `before`: what the
+    // destination held when this run rewrote it (the note's tracked file, or
+    // its own untracked file reclaimed by front matter after the mirror was
+    // off), None for a file this run created.
+    let mut written: Vec<(String, PathBuf, Option<String>, Option<Vec<u8>>)> = Vec::new();
+    let rollback = |written: &[(String, PathBuf, Option<String>, Option<Vec<u8>>)]| {
+        for (_, path, _, before) in written {
+            match before {
+                Some(bytes) => { let _ = crate::fsutil::write_private_atomic(path, bytes); }
+                None => { let _ = std::fs::remove_file(path); }
             }
         }
     };
@@ -216,13 +218,20 @@ pub fn sync_all(db: &Database) -> Result<usize, String> {
         let Some(note) = db.get_note(&id)? else { continue };
         let old = db.mirror_path(&note.id)?;
         let result = allocate_path(db, &dir, &note).and_then(|path| {
-            let existed = std::fs::symlink_metadata(&path).is_ok();
+            let before = if std::fs::symlink_metadata(&path).is_ok() {
+                // allocate_path only hands out a file we own; one that cannot
+                // be read back now could not be restored, so it is not touched.
+                Some(crate::fsutil::read_owned_head(&path, usize::MAX)
+                    .ok_or_else(|| format!("read {}: cannot keep a copy to restore", path.display()))?)
+            } else {
+                None
+            };
             let tabs = db.tabs_for(&note.id)?;
             write_atomic(&path, &document(&note, &tabs))?;
-            Ok((path, existed))
+            Ok((path, before))
         });
         match result {
-            Ok((path, existed)) => written.push((note.id, path, old, existed)),
+            Ok((path, before)) => written.push((note.id, path, old, before)),
             Err(e) => {
                 rollback(&written);
                 return Err(e);
@@ -394,7 +403,7 @@ mod tests {
 
     // Off then on in the same folder: the rows are gone, the files are not.
     // A run that rewrites them and then fails takes back only the files it
-    // created; the rewritten ones existed before it and stay.
+    // created; the rewritten ones existed before it and stay, as they were.
     #[test]
     fn a_failed_run_keeps_the_files_it_only_rewrote() {
         let db = db();
@@ -403,6 +412,8 @@ mod tests {
         db.set_setting(SETTING, dir.to_str().unwrap()).unwrap();
         assert_eq!(sync_all(&db).unwrap(), 2);
         db.clear_mirror_paths().unwrap();   // the mirror was switched off
+        let alpha_before = std::fs::read(dir.join("Alpha.md")).unwrap();
+        db.execute_for_tests("UPDATE notes SET content_blocks = '[{\"type\":\"text\",\"content\":\"edited since\"}]' WHERE id = 'a'");
         // A later note (created after the others) finds every name taken by
         // the user's own documents, so the run fails after Alpha and Beta.
         db.create_notes(&[note("g", "Gamma")]).unwrap();
@@ -417,6 +428,7 @@ mod tests {
         assert!(dir.join("Alpha.md").exists(), "rewritten, not created: kept on rollback");
         assert!(dir.join("Beta.md").exists());
         assert!(file_belongs_to(&dir.join("Alpha.md"), "a"));
+        assert_eq!(std::fs::read(dir.join("Alpha.md")).unwrap(), alpha_before, "rewritten, then restored whole");
         // The same failure on a fresh folder leaves nothing behind.
         let fresh = temp_dir();
         db.set_setting(SETTING, fresh.to_str().unwrap()).unwrap();
