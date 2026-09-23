@@ -327,9 +327,20 @@ Item {
 
   // The tab, its unsaved edits and its settings go only once the helper has
   // deleted it; a refused or failed deletion changes nothing.
+  // A tab's settings (note.<note>.<field>.<tab>) written while its deletion
+  // is in flight are held like a note's (tabId -> { key: value }); once it is
+  // gone they are refused.
+  property var _deletingTabs: Object.create(null)
+  property var _goneTabs: Object.create(null)
+
   function deleteTab(tabId, cb) {
     var noteId = store._tabNote[tabId]
+    var dt = store._deletingTabs; dt[tabId] = Object.create(null); store._deletingTabs = dt
     store._call("deleteTab", { tabId: tabId }, function(err) {
+      var held = store._deletingTabs[tabId] || Object.create(null)
+      var dt2 = store._deletingTabs; delete dt2[tabId]; store._deletingTabs = dt2
+      if (!err) { var g = store._goneTabs; g[tabId] = true; store._goneTabs = g }
+      else for (var hk in held) store.setSetting(hk, held[hk])
       if (!err && noteId) {
         var d = store._dirtyTabs; delete d[tabId]; store._dirtyTabs = d
         var s = store._tabSent; delete s[tabId]; store._tabSent = s
@@ -969,17 +980,27 @@ Item {
     return (v === undefined || v === null || v === "") ? fallback : v
   }
 
-  // A note's setting written while the note's deletion is in flight is held
-  // until the outcome (see _deleting); true when it was.
+  // A note's or tab's setting written while its deletion is in flight is
+  // held until the outcome (see _deleting, _deletingTabs); true when it was.
   function _holdForDeletion(key, value) {
     var m = /^note\.([^.]+)\./.exec(key)
-    if (!m || !store._deleting[m[1]]) return false
-    store._deleting[m[1]][key] = String(value)
+    if (!m) return false
+    var held = store._deleting[m[1]]
+    var t = /^note\.[^.]+\.[^.]+\.([^.]+)$/.exec(key)
+    if (!held && t) held = store._deletingTabs[t[1]]
+    if (!held) return false
+    held[key] = String(value)
     return true
+  }
+
+  function _tabGone(key) {
+    var t = /^note\.[^.]+\.[^.]+\.([^.]+)$/.exec(key)
+    return !!(t && store._goneTabs[t[1]])
   }
 
   function setSetting(key, value) {
     if (store._holdForDeletion(key, value)) return
+    if (store._tabGone(key)) return   // its tab is gone
     var m = /^note\.([^.]+)\./.exec(key)
     if (m && !store.notes[m[1]]) return   // its note is gone
     var s = ({})

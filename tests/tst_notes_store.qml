@@ -36,6 +36,7 @@ Item {
       store._reloading = false; store._reloadAgain = false; store._reloadWaiters = []
       store._pendingStack = Object.create(null); store.stackDelayMs = 40
       store._restoring = Object.create(null); store._life = Object.create(null); store._landedOpen = Object.create(null); store._deleting = Object.create(null)
+      store._deletingTabs = Object.create(null); store._goneTabs = Object.create(null)
       store._recount()
       store._rebuild()
     }
@@ -712,6 +713,34 @@ Item {
       client.answer("deleteNote", "database is locked", null)
       compare(client.count("setSetting"), 2, "the deletion was refused: the retry goes")
       compare(client.pending[client.pending.length - 1].args.value, "retried title")
+    }
+
+    function test_a_tab_setting_retry_waits_for_the_tab_deletion() {
+      store.tabs = { n: [{ id: "t", noteId: "n", position: 1, icon: "", contentBlocks: "[]" }] }
+      store._tabNote = { t: "n" }
+      store.setSetting("note.n.title.t", "tab title")
+      client.answer("setSetting", "database is locked", null)
+      store.deleteTab("t")
+      store.flush()
+      store.setSetting("note.n.label.t", "late label")
+      compare(client.count("setSetting"), 1, "retry and new write are held, not sent behind the delete")
+      client.answer("deleteTab", null, true)
+      store.flush()
+      store.setSetting("note.n.label.t", "later still")
+      compare(client.count("setSetting"), 1, "the tab is gone: its settings go with it")
+      store.setSetting("note.n.title.main", "main title")
+      compare(client.count("setSetting"), 2, "the note's other settings still go")
+    }
+
+    function test_tab_settings_held_during_a_refused_tab_deletion_are_written_after() {
+      store.tabs = { n: [{ id: "t", noteId: "n", position: 1, icon: "", contentBlocks: "[]" }] }
+      store._tabNote = { t: "n" }
+      store.deleteTab("t")
+      store.setSetting("note.n.title.t", "kept tab title")
+      compare(client.count("setSetting"), 0)
+      client.answer("deleteTab", "database is locked", null)
+      compare(client.count("setSetting"), 1, "the deletion was refused: the write goes")
+      compare(store.settings["note.n.title.t"], "kept tab title")
     }
 
     // The window undoes its close on this error: the cache must still say
