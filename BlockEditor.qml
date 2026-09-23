@@ -244,6 +244,14 @@ FocusScope {
   }
 
   Keys.onPressed: function(event) {
+    // Ctrl+Home / Ctrl+End from a block that does not handle them itself
+    // (an image, a divider): text blocks answer them before this.
+    if ((event.key === Qt.Key_Home || event.key === Qt.Key_End)
+        && (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier)) === Qt.ControlModifier) {
+      editorRoot.focusBlock(event.key === Qt.Key_End ? blocksModel.count - 1 : 0, event.key === Qt.Key_End)
+      event.accepted = true
+      return
+    }
     if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
     if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
       editorRoot.focusBlock(editorRoot.focusedIndex + ((event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier)) ? -1 : 1), false)

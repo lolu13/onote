@@ -83,6 +83,15 @@ Item {
       keyClick(Qt.Key_Home, Qt.ControlModifier); compare(editor.focusedIndex, 0)
       compare(editor.dirty, false)
     }
+    function test_ctrl_home_end_from_an_image_or_a_divider() {
+      editor.focusBlock(3, false); wait(0)
+      compare(editor.focusedIndex, 3, "the divider has focus")
+      keyClick(Qt.Key_Home, Qt.ControlModifier); compare(editor.focusedIndex, 0)
+      editor.load(JSON.stringify([{type:"text",content:"A"}, {type:"image",src:"data:image/png;base64,AA=="}, {type:"text",content:"Z"}]))
+      wait(30); editor.focusBlock(1, false); wait(0)
+      compare(editor.focusedIndex, 1, "the image has focus")
+      keyClick(Qt.Key_End, Qt.ControlModifier); compare(editor.focusedIndex, 2)
+    }
     function test_columns_focus_without_changing_text() {
       var blocks=[]
       for(var i=0;i<24;i++) blocks.push({type:"text",content:"Row "+i})

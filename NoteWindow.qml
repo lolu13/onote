@@ -6,6 +6,7 @@ import Quickshell
 import Quickshell.Hyprland
 import qs.Commons
 import "Themes.js" as Themes
+import "NoteLayout.js" as NoteLayout
 
 FloatingWindow {
   id: win
@@ -686,7 +687,7 @@ FloatingWindow {
         id: editor
         width: parent.width
         onLeaveTop: { titleField.forceActiveFocus(); titleField.cursorPosition = titleField.text.length }
-        height: parent.height - titleBar.height - tabBar.height - keyboardHint.height - 1 - parent.spacing * 4
+        height: NoteLayout.editorHeight(parent.height, titleBar.height + tabBar.height + 1, keyboardHint.implicitHeight, keyboardHint.visible, parent.spacing)
         columns: options.columns
         store: win.store
         noteId: win.noteId
@@ -698,6 +699,7 @@ FloatingWindow {
       Text {
         id: keyboardHint
         width: parent.width
+        visible: NoteLayout.hintShown(parent.height, titleBar.height + tabBar.height + 1, implicitHeight, parent.spacing, win.fontSize, editor.notice.length > 0)
         // A save the editor had to refuse takes the hint's place until it is fixed.
         text: editor.notice.length ? editor.notice : "Ctrl+K commands · F6 controls · Ctrl+Tab tabs · F2 rename"
         elide: Text.ElideRight
