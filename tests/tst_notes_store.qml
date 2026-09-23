@@ -37,6 +37,7 @@ Item {
       store._pendingStack = Object.create(null); store.stackDelayMs = 40
       store._restoring = Object.create(null); store._life = Object.create(null); store._landedOpen = Object.create(null); store._deleting = Object.create(null)
       store._deletingTabs = Object.create(null); store._goneTabs = Object.create(null)
+      store._deletingCalls = Object.create(null); store._deletingTabCalls = Object.create(null)
       store._recount()
       store._rebuild()
     }
@@ -741,6 +742,30 @@ Item {
       client.answer("deleteTab", "database is locked", null)
       compare(client.count("setSetting"), 1, "the deletion was refused: the write goes")
       compare(store.settings["note.n.title.t"], "kept tab title")
+    }
+
+    function test_overlapping_tab_deletions_keep_the_held_edit() {
+      store.tabs = { n: [{ id: "t", noteId: "n", position: 1, icon: "", contentBlocks: "[]" }] }
+      store._tabNote = { t: "n" }
+      store.deleteTab("t")
+      store.setSetting("note.n.title.t", "edited between")
+      store.deleteTab("t")
+      client.answer("deleteTab", "database is locked", null)
+      compare(client.count("setSetting"), 0, "the second deletion is still out: held")
+      store.setSetting("note.n.label.t", "named meanwhile")
+      client.answer("deleteTab", "database is locked", null)
+      compare(client.count("setSetting"), 2, "both refused: every held edit goes")
+      compare(store.settings["note.n.title.t"], "edited between")
+    }
+
+    function test_overlapping_note_deletions_one_success_drops_the_hold() {
+      store.deleteNote("n")
+      store.setSetting("note.n.title.t", "edited between")
+      store.deleteNote("n")
+      client.answer("deleteNote", null, true)
+      client.answer("deleteNote", "no such note", null)
+      compare(client.count("setSetting"), 0, "the note is gone: nothing is written")
+      compare(store.noteById("n"), null)
     }
 
     // The window undoes its close on this error: the cache must still say

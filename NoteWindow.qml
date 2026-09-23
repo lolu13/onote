@@ -334,7 +334,7 @@ FloatingWindow {
   function closeTab() {
     if (win.tabCount === 1) { win.closeToStack(); return }
     if (win.activeTab === 0) return            // tab 1 is the note; use Ctrl+W on another tab
-    if (editor.isEmpty()) { win.deleteActiveTab(); return }
+    if (editor.isEmpty() && !options.tabHasText(win.extraTabs[win.activeTab - 1].id)) { win.deleteActiveTab(); return }
     win.confirmClose = true
     overlayKeys.forceActiveFocus()
   }

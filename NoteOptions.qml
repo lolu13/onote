@@ -49,6 +49,12 @@ QtObject {
     return store ? store.getSetting(prefix + "label." + (id || "main"), "") : ""
   }
 
+  // Text the user wrote for a tab outside its body (a title, pending or
+  // saved, or a name): closing such a tab asks first like any other content.
+  function tabHasText(id) {
+    return String(tabTitle(id)).trim().length > 0 || String(tabLabel(id)).trim().length > 0
+  }
+
   function renameTab(id, text) {
     if (store) store.setSetting(prefix + "label." + (id || "main"), text.trim().slice(0, 80))
   }

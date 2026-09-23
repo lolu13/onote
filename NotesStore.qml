@@ -331,16 +331,16 @@ Item {
   // is in flight are held like a note's (tabId -> { key: value }); once it is
   // gone they are refused.
   property var _deletingTabs: Object.create(null)
+  property var _deletingTabCalls: Object.create(null)
   property var _goneTabs: Object.create(null)
 
   function deleteTab(tabId, cb) {
     var noteId = store._tabNote[tabId]
-    var dt = store._deletingTabs; dt[tabId] = Object.create(null); store._deletingTabs = dt
+    store._beginDeletion(store._deletingTabs, store._deletingTabCalls, tabId)
     store._call("deleteTab", { tabId: tabId }, function(err) {
-      var held = store._deletingTabs[tabId] || Object.create(null)
-      var dt2 = store._deletingTabs; delete dt2[tabId]; store._deletingTabs = dt2
+      var held = store._endDeletion(store._deletingTabs, store._deletingTabCalls, tabId, !err)
       if (!err) { var g = store._goneTabs; g[tabId] = true; store._goneTabs = g }
-      else for (var hk in held) store.setSetting(hk, held[hk])
+      else if (held) for (var hk in held) store.setSetting(hk, held[hk])
       if (!err && noteId) {
         var d = store._dirtyTabs; delete d[tabId]; store._dirtyTabs = d
         var s = store._tabSent; delete s[tabId]; store._tabSent = s
@@ -857,6 +857,25 @@ Item {
   // Such writes are held (id -> { key: value }) until the outcome is known:
   // dropped with the note, applied when the deletion was refused.
   property var _deleting: Object.create(null)
+  property var _deletingCalls: Object.create(null)   // id -> deletions in flight
+
+  // Overlapping deletions of one record share its hold: a second call keeps
+  // what the first holds, and the hold ends with the first success (the
+  // writes go with the record) or the last refusal (they are written).
+  function _beginDeletion(holds, calls, id) {
+    if (!holds[id]) holds[id] = Object.create(null)
+    calls[id] = (calls[id] || 0) + 1
+  }
+
+  // The held writes to replay: null unless this reply ends a hold refused.
+  function _endDeletion(holds, calls, id, succeeded) {
+    if (!calls[id]) return null   // an earlier success already ended it
+    var held = holds[id]
+    if (succeeded) { delete holds[id]; delete calls[id]; return null }
+    if (--calls[id] > 0) return null   // another call is still out
+    delete holds[id]; delete calls[id]
+    return held
+  }
   // A superseded reopen whose unstack reached the disk (id -> a sequence
   // number): the cache may say stacked over an open row until the operation
   // that superseded it settles the row. One that is refused settles it with
@@ -874,18 +893,17 @@ Item {
   }
 
   function deleteNote(id, cb) {
-    var d = store._deleting; d[id] = Object.create(null); store._deleting = d
+    store._beginDeletion(store._deleting, store._deletingCalls, id)
     var gen = store._bumpLife(id)
     store._call("deleteNote", { noteId: id }, function(err) {
-      var held = store._deleting[id] || Object.create(null)
-      var d2 = store._deleting; delete d2[id]; store._deleting = d2
+      var held = store._endDeletion(store._deleting, store._deletingCalls, id, !err)
       if (!err) store._remove(id)
       else {
         // Refused, and nothing newer (a Hide All queued behind it, say) owns
         // the row: a reopen that landed underneath is settled by a reload.
         // Otherwise the newer operation's reply settles the row.
         if (store._life[id] === gen) store._settleLandedOpen(id)
-        for (var k in held) store.setSetting(k, held[k])
+        if (held) for (var k in held) store.setSetting(k, held[k])
       }
       if (cb) cb(err)
     })

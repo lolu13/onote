@@ -93,6 +93,20 @@ Item {
       options.tabId = ""; compare(options.columns, 3)
       options.cycleColumns(); compare(options.columns, 1)
     }
+    function test_a_tab_with_only_a_title_or_a_name_has_text() {
+      compare(options.tabHasText("second"), false)
+      options.tabId = "second"
+      options.editTitle("Only a title")
+      compare(options.tabHasText("second"), true, "a pending title counts")
+      options.flushTitle()
+      compare(options.tabHasText("second"), true, "and a saved one")
+      compare(options.tabHasText("third"), false)
+      options.renameTab("third", "Named")
+      compare(options.tabHasText("third"), true, "a name counts too")
+      options.editTitle("   ")
+      options.flushTitle()
+      compare(options.tabHasText("second"), false, "blank is empty")
+    }
     function test_tab_labels_are_independent_of_titles_and_lock() {
       compare(options.tabLabel(""), "")
       options.renameTab("", "  Short name  ")
