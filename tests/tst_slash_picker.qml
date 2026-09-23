@@ -89,6 +89,27 @@ Item {
       compare(saved[0].type, "code")
       compare(saved[0].content, "a", "Focus and typing must survive menu destruction")
     }
+    // The picker is a row index: left open across a load (a tab switch) or a
+    // move, Enter would convert, and empty, whatever block sits at that row now.
+    function test_picker_does_not_outlive_a_load_or_a_move() {
+      editor.focusBlock(0, false); wait(0)
+      keyClick(Qt.Key_Slash)
+      compare(editor.pickerIndex, 0)
+      editor.load(JSON.stringify([{ type: "text", content: "important line" }, { type: "text", content: "second" }]))
+      compare(editor.pickerIndex, -1, "closed by the load")
+      editor.focusBlock(0, true); wait(0)
+      keyClick(Qt.Key_Return)
+      editor.flush()
+      var b = JSON.parse(testStore.saved)
+      compare(b.length, 3, "Enter made a new row, it chose nothing")
+      compare(b[0].content, "important line")
+      editor.focusBlock(1, false); wait(0)
+      keyClick(Qt.Key_Slash)
+      compare(editor.pickerIndex, 1)
+      editor.moveBlock(1, -1)
+      compare(editor.pickerIndex, -1, "closed by the move")
+    }
+
     function test_mouse_selection_survives_menu_destruction() {
       editor.fontSize = 14
       editor.focusBlock(0, false)

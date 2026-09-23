@@ -25,8 +25,11 @@ FocusScope {
   height: (loader.item ? loader.item.height : 0) + (picker.visible ? picker.height + 4 : 0)
 
   onActiveFocusChanged: if (activeFocus && editor) editor.focusedIndex = rowIndex
+  // A focused row renumbered by a move, insert or removal above it.
+  onRowIndexChanged: if (activeFocus && editor) editor.focusedIndex = rowIndex
 
   function focusEditor(atEnd) { if (loader.item) loader.item.focusEditor(atEnd) }
+  function focusLabelEditor() { if (loader.item && typeof loader.item.focusLabel === "function") loader.item.focusLabel() }
 
   // callbacks used by delegates
   function setContent(t) { editor.setContent(rowIndex, t) }
@@ -35,6 +38,7 @@ FocusScope {
   function enter() { editor.onEnter(rowIndex) }
   function backspaceOnEmpty() { editor.onBackspaceOnEmpty(rowIndex) }
   function moveFocus(delta) { editor.focusBlock(rowIndex + delta, delta < 0) }
+  function focusEdge(last) { editor.focusBlock(last ? editor.count - 1 : 0, last) }
   function remove() { editor.removeBlock(rowIndex) }
 
   Loader {

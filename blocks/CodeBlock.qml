@@ -39,8 +39,15 @@ Item {
     onBackspaceOnEmpty: if (row) row.backspaceOnEmpty()
     onUpAtStart: if (row) row.moveFocus(-1)
     onDownAtEnd: if (row) row.moveFocus(1)
-    onTabPressed: {
+    onEdgeRequested: function(last) { if (row) row.focusEdge(last) }
+    onTabPressed: function(backwards) {
       var p = edit.cursorPosition
+      if (backwards) {
+        var start = p === 0 ? 0 : edit.text.lastIndexOf("\n", p - 1) + 1
+        var spaces = edit.text.slice(start, start + 2) === "  " ? 2 : (edit.text.charAt(start) === " " ? 1 : 0)
+        if (spaces) edit.remove(start, start + spaces)
+        return
+      }
       edit.insert(p, "  ")
       edit.cursorPosition = p + 2
     }

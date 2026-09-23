@@ -19,16 +19,21 @@ import "RulesLua.js" as RulesLua
 Item {
   id: rules
 
-  signal placed(var ids)
+  // ok: the rules exist. Otherwise hyprctl failed twice and the notes open
+  // where the focus is; their windows must not record that as their place.
+  signal placed(var ids, bool ok)
 
   property var _queue: []      // [{ id, ws }] waiting for the next hyprctl run
   property var _inflight: []   // note ids covered by the running hyprctl
+  property var _inflightNotes: []   // the batch itself, for one retry
+  property bool _retrying: false    // this run is the retry of a failed batch
   property bool _busy: false   // Process.running turns true asynchronously; gate on this
 
   // The Lua builders live in RulesLua.js (testable without Quickshell); these
   // wrappers keep the API NoteWindows uses.
   function shortId(noteId) { return RulesLua.shortId(noteId) }
   function tag(noteId) { return RulesLua.tag(noteId) }
+  function titleMatches(title, noteId) { return RulesLua.titleMatches(title, noteId) }
   function windowSelector(noteId) { return RulesLua.windowSelector(noteId) }
   function workspaceSelector(note) { return RulesLua.workspaceSelector(note) }
   function ruleLua(note) { return RulesLua.ruleLua(note) }
@@ -49,6 +54,7 @@ Item {
     var lua = []
     for (var i = 0; i < batch.length; i++) if (rules.shortId(batch[i].id)) lua.push(rules.ruleLua(batch[i]))
     rules._inflight = batch.map(function(n) { return n.id })
+    rules._inflightNotes = batch
     if (!lua.length) { rules._finish(0); return }
     rules._err = ""
     rules._errBytes = 0
@@ -100,8 +106,20 @@ Item {
     if (rules._errBytes > rules.maxErrBytes) err += " …(" + rules._errBytes + " bytes)"
     if (err.length) console.warn("onote: workspace rule:", err)
     rules._err = ""
+    if (code !== 0 && !rules._retrying) {
+      // Once more, at the front of the queue: a transient failure (Hyprland
+      // busy, a timeout) must not move every note in the batch.
+      console.warn("onote: hyprctl eval exited", code, "- retrying the batch once")
+      rules._retrying = true
+      rules._queue = rules._inflightNotes.concat(rules._queue)
+      rules._inflightNotes = []
+      rules._pump()
+      return
+    }
+    rules._retrying = false
+    rules._inflightNotes = []
     if (code !== 0) console.warn("onote: hyprctl eval exited", code, "- notes open on the current workspace")
-    rules.placed(ids)
+    rules.placed(ids, code === 0)
     rules._pump()
   }
 

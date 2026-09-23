@@ -69,7 +69,7 @@ Item {
     root.rebuild()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function close() { root.opened = false; root.confirmOpen = false }
+  function close() { root.opened = false; root.confirmOpen = false; root.deleteTarget = "" }
   function dismiss() {
     root.close()
     if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId)
@@ -86,7 +86,7 @@ Item {
 
   // "stacked", "pinned", "scratchpad", "open on 3", or plain "open" for an unbound note.
   function whereIs(note) {
-    if (note.piled === true) return "stacked"
+    if (root.store.isStacked(note)) return "stacked"
     if (note.pinned === true) return "pinned"
     var name = String(note.workspaceName || "")
     if (name.indexOf("special:") === 0) return name === "special:scratchpad" ? "scratchpad" : name.slice(8)
@@ -131,7 +131,7 @@ Item {
         noteId: n.id,
         title: title.length ? title : (root.localTime(n.createdAt) || "Untitled"),
         untitled: title.length === 0,
-        piled: n.piled === true,
+        piled: root.store.isStacked(n),
         where: root.whereIs(n),
         updated: root.localTime(n.updatedAt),
         preview: preview,
@@ -154,8 +154,9 @@ Item {
     var q = root.filterText.trim()
     if (!root.store || q.length < 2) return
     root.store.search(q, function(err, hits) {
-      if (err || !Array.isArray(hits)) return
       if (root.filterText.trim() !== q) return
+      // A failed search must not leave the previous query's matches standing.
+      if (err || !Array.isArray(hits)) { root.textMatches = Object.create(null); root.rebuild(); return }
       var m = Object.create(null)
       for (var i = 0; i < hits.length; i++) m[hits[i]] = true
       root.textMatches = m
@@ -174,7 +175,7 @@ Item {
     list.positionViewAtIndex(root.selectedIndex, ListView.Contain)
   }
 
-  function cycleScope() { root.scope = (root.scope + 1) % 3; root.rebuild() }
+  function cycleScope(delta) { root.scope = (root.scope + (delta || 1) + 3) % 3; root.rebuild() }
 
   function activate(i) {
     if (i < 0 || i >= rows.count || !root.store) return
@@ -188,16 +189,27 @@ Item {
     }
   }
 
-  function requestDelete(i) {
+  // Deleting always asks. Shift+Delete only preselects the Delete button, so
+  // Enter confirms; nothing removes a note in one keystroke.
+  // The note asked about is pinned by id when the dialog opens: the list can
+  // be rebuilt underneath it (a search reply, a resync, the mouse moving the
+  // selection) and the confirmation must never land on whatever row holds
+  // the selection by then.
+  property string deleteTarget: ""
+  property string deleteTargetTitle: ""
+  function requestDelete(i, preselectDelete) {
     if (i < 0 || i >= rows.count) return
-    confirm.selectedIndex = 0            // Cancel is the safe default
+    var r = rows.get(i)
+    root.deleteTarget = String(r.noteId)
+    root.deleteTargetTitle = String(r.title)
+    confirm.selectedIndex = preselectDelete ? 1 : 0   // Cancel is the safe default
     root.confirmOpen = true
   }
   function confirmDelete() {
-    var i = root.selectedIndex
+    var id = root.deleteTarget
+    root.deleteTarget = ""
     root.confirmOpen = false
-    if (i < 0 || i >= rows.count || !root.store) return
-    var id = rows.get(i).noteId
+    if (!id || !root.store || !root.store.noteById(id)) return   // gone meanwhile: nothing to delete
     root.store.deleteNote(id, function() { root.rebuild() })
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -209,7 +221,7 @@ Item {
   readonly property var settingsDefs: [
     { key: "defaultNoteWidth",  label: "Default note width",          kind: "number", def: 300, min: 200, max: 4000, step: 20,  unit: "px" },
     { key: "defaultNoteHeight", label: "Default note height",         kind: "number", def: 350, min: 150, max: 4000, step: 20,  unit: "px" },
-    { key: "defaultFontSize",   label: "Text size for new notes",     kind: "number", def: 0,   min: 10,  max: 40,   step: 1,   unit: "px", auto: true, hint: "Backspace: same as Omarchy" },
+    { key: "onote.defaultFontSize", label: "Text size for new notes",     kind: "number", def: 0,   min: 10,  max: 40,   step: 1,   unit: "px", auto: true, hint: "Backspace: same as Omarchy" },
     { key: "autoSaveInterval",  label: "Autosave delay",              kind: "number", def: 500, min: 100, max: 5000, step: 100, unit: "ms" },
     { key: "defaultTheme",      label: "Theme for new notes",         kind: "choice", def: "system" },
     { key: "markdownMirrorDir", label: "Markdown mirror folder",      kind: "text",   def: "", hint: "empty = off · e.g. ~/Notes" }
@@ -265,7 +277,7 @@ Item {
     var d = root.settingsDefs[root.settingsIndex]
     var n = root.settingsDefs.length
     if (event.key === Qt.Key_Escape) { root.settingsView = false; return true }
-    if (event.key === Qt.Key_Up) { root.settingsIndex = (root.settingsIndex + n - 1) % n; return true }
+    if (event.key === Qt.Key_Up || event.key === Qt.Key_Backtab || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) { root.settingsIndex = (root.settingsIndex + n - 1) % n; return true }
     if (event.key === Qt.Key_Down || event.key === Qt.Key_Tab) { root.settingsIndex = (root.settingsIndex + 1) % n; return true }
     if (event.key === Qt.Key_Left || event.key === Qt.Key_Minus) { root.adjustSetting(d, -1); return true }
     if (event.key === Qt.Key_Right || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) { root.adjustSetting(d, 1); return true }
@@ -287,16 +299,28 @@ Item {
   function copySelected() {
     var r = root.selectedRow()
     if (!r || !root.store) return
-    root.store.copyMarkdown(r.noteId, function(err) {
-      root.showStatus(err ? "Copy failed: " + err : "Copied “" + r.title + "” as Markdown")
+    // Plain copies: the row is model-owned and gone if the list rebuilds
+    // while the save is awaited.
+    var noteId = String(r.noteId), title = String(r.title)
+    // The helper reads the database: pending edits go first, and a save that
+    // was refused or could not be sent fails the copy instead of hiding.
+    root.store.settled(noteId, function(e) {
+      if (e) { root.showStatus("Copy failed: " + e); return }
+      root.store.copyMarkdown(noteId, function(err) {
+        root.showStatus(err ? "Copy failed: " + err : "Copied “" + title + "” as Markdown")
+      })
     })
   }
 
   function exportSelected() {
     var r = root.selectedRow()
     if (!r || !root.store) return
-    root.store.exportNote(r.noteId, function(err, path) {
-      root.showStatus(err ? "Export failed: " + err : "Saved " + String(path).replace(/^\/home\/[^/]+/, "~"))
+    var noteId = String(r.noteId)
+    root.store.settled(noteId, function(e) {
+      if (e) { root.showStatus("Export failed: " + e); return }
+      root.store.exportNote(noteId, function(err, path) {
+        root.showStatus(err ? "Export failed: " + err : "Saved " + String(path).replace(/^\/home\/[^/]+/, "~"))
+      })
     })
   }
 
@@ -310,7 +334,19 @@ Item {
     function onOpenNotesChanged() { if (root.opened) root.rebuild() }
     function onStackedNotesChanged() { if (root.opened) root.rebuild() }
     function onNoteRemoved(id) { delete root.previewCache[id] }
-    function onResynced() { root.previewCache = Object.create(null); if (root.opened) root.rebuild() }
+    // A local edit or its acknowledgement: title and preview follow at once
+    // (opening the Library blurs the editor, whose save lands after the rows
+    // were built), and an active search asks the helper again.
+    function onNoteChanged(id) {
+      if (!root.opened) return
+      root.rebuild()
+      if (root.filterText.trim().length >= 2) searchTimer.restart()
+    }
+    function onResynced() {
+      root.previewCache = Object.create(null)
+      if (root.opened) root.rebuild()
+      if (root.filterText.trim().length >= 2) searchTimer.restart()
+    }
   }
 
   Timer { id: searchTimer; interval: 250; repeat: false; onTriggered: root.runSearch() }
@@ -357,14 +393,15 @@ Item {
           } else if (Util.editsFilter(event, root.filterText)) {
             root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true
           } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-            root.cycleScope(); event.accepted = true
+            root.cycleScope(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1); event.accepted = true
           } else if (ctrl && event.key === Qt.Key_N) {
             root.createAndDismiss(); event.accepted = true
           } else if (ctrl && event.key === Qt.Key_E) {
             if (event.modifiers & Qt.ShiftModifier) root.exportSelected(); else root.copySelected()
             event.accepted = true
           } else if (event.key === Qt.Key_Delete) {
-            root.requestDelete(root.selectedIndex); event.accepted = true
+            if (!event.isAutoRepeat) root.requestDelete(root.selectedIndex, event.modifiers === Qt.ShiftModifier)
+            event.accepted = true
           } else if (event.key === Qt.Key_Up) { root.select(-1); event.accepted = true }
           else if (event.key === Qt.Key_Down) { root.select(1); event.accepted = true }
           else if (event.key === Qt.Key_PageUp) { root.select(-6); event.accepted = true }
@@ -383,10 +420,7 @@ Item {
           anchors.fill: parent
           opened: root.confirmOpen
           z: 10
-          message: {
-            var r = rows.count && root.selectedIndex >= 0 && root.selectedIndex < rows.count ? rows.get(root.selectedIndex) : null
-            return r ? "Delete “" + root.plainLabel(r.title) + "”? This cannot be undone." : "Delete this note?"
-          }
+          message: root.deleteTarget ? "Delete “" + root.plainLabel(root.deleteTargetTitle) + "”? This cannot be undone." : "Delete this note?"
           confirmText: "Delete"
           background: root.background
           foreground: root.foreground
@@ -395,7 +429,7 @@ Item {
           selectedText: root.selectedText
           fontFamily: root.fontFamily
           cornerRadius: 0
-          onCanceled: { root.confirmOpen = false; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
+          onCanceled: { root.confirmOpen = false; root.deleteTarget = ""; Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
           onConfirmed: root.confirmDelete()
         }
       }
@@ -716,7 +750,7 @@ Item {
           textFormat: Text.PlainText
           text: root.status.length ? root.status
               : root.settingsView ? "↑↓ select  ·  ←→ change  ·  Enter edit  ·  Ctrl+, notes  ·  Esc back"
-              : "Enter open  ·  Del delete  ·  Tab filter  ·  Ctrl+N new  ·  Ctrl+E copy  ·  Ctrl+Shift+E save .md  ·  Ctrl+, settings  ·  Esc"
+              : "Enter open  ·  Del delete  ·  Shift+Del delete, Enter confirms  ·  Tab filter  ·  Ctrl+N new  ·  Ctrl+E copy  ·  Ctrl+Shift+E save .md  ·  Ctrl+, settings  ·  Esc"
           color: root.status.length ? root.accent : root.foreground
           opacity: root.status.length ? 1 : 0.5
           font.family: root.fontFamily

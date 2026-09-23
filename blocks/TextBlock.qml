@@ -54,6 +54,7 @@ Item {
     id: edit
     x: prefix.width
     width: parent.width - prefix.width
+    handlesPaste: true
     initialText: row ? row.content : ""
     palette: block.pal
     fontSize: block.size
@@ -67,7 +68,8 @@ Item {
     onBackspaceOnEmpty: row.backspaceOnEmpty()
     onUpAtStart: row.moveFocus(-1)
     onDownAtEnd: row.moveFocus(1)
-    onTabPressed: {}
+    onTabPressed: function(backwards) { if (row) row.moveFocus(backwards ? -1 : 1) }
+    onEdgeRequested: function(last) { if (row) row.focusEdge(last) }
     // An image on the clipboard becomes an image block; anything else pastes as text.
     onPasteRequested: {
       if (row && row.editor) row.editor.pasteImage(row.rowIndex, edit.length === 0, function(handled) { if (!handled) edit.paste() })

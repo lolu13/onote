@@ -21,6 +21,24 @@ Item {
       compare(Rules.shortId(12), "")
     }
 
+    // A tag matches only as the generated suffix: a user title can carry
+    // another note's tag (it is visible in every title bar), even a spoofed
+    // suffix, and both windows have the shell's class.
+    function test_tag_matches_only_the_generated_suffix() {
+      var other = "ffffffffffff"
+      verify(Rules.titleMatches("Groceries — Onote [dn:0123456789ab]", hex))
+      verify(Rules.titleMatches(" — Onote [dn:0123456789ab]", hex), "an empty user title")
+      verify(!Rules.titleMatches("see [dn:0123456789ab] — Onote [dn:" + other + "]", hex), "the tag inside a user title")
+      verify(!Rules.titleMatches("x — Onote [dn:0123456789ab] — Onote [dn:" + other + "]", hex), "a spoofed suffix inside a user title")
+      verify(!Rules.titleMatches("[dn:0123456789ab]", hex), "a bare tag")
+      verify(!Rules.titleMatches("Groceries — Onote [dn:0123456789ab] ", hex), "not at the end")
+      verify(!Rules.titleMatches("Groceries — Onote [dn:0123456789ab]", "bad-id"))
+      verify(!Rules.titleMatches(null, hex)); verify(!Rules.titleMatches(undefined, hex))
+      var lua = Rules.ruleLua({ id: hex, pinned: false, workspaceName: "", workspaceId: 2 })
+      verify(lua.indexOf('title = ".*\\\\[dn:0123456789ab\\\\]"') !== -1, "the rule regex ends at the tag: " + lua)
+      compare(Rules.windowSelector(hex), "title:.*\\\\[dn:0123456789ab\\\\]")
+    }
+
     function test_workspace_selector_refuses_hostile_names() {
       compare(Rules.workspaceSelector({ workspaceName: "3", workspaceId: 3 }), "3")
       compare(Rules.workspaceSelector({ workspaceName: "special:notes", workspaceId: -98 }), "special:notes")

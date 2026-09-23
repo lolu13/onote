@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.lolu13.onote",
   "name": "Onote",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "lolu13",
   "license": "MIT",
   "description": "Sticky notes as tiled Hyprland windows, stored in SQLite, drawn by the shell itself",

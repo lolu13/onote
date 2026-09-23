@@ -16,7 +16,9 @@ TextEdit {
   signal backspaceOnEmpty()
   signal upAtStart()
   signal downAtEnd()
-  signal tabPressed()
+  signal tabPressed(bool backwards)
+  signal edgeRequested(bool last)   // Ctrl+Home / Ctrl+End: first or last block of the note
+  property bool handlesPaste: false     // set by a block that answers pasteRequested
   signal pasteRequested()      // Ctrl+V: the row decides between an image block and text
   property bool pickerActive: false
   signal pickerMove(int delta)
@@ -73,13 +75,16 @@ TextEdit {
     if (ctrl && !shift && event.key === Qt.Key_B) { wrapSelection("**", "**"); event.accepted = true; return }
     if (ctrl && !shift && event.key === Qt.Key_I) { wrapSelection("*", "*"); event.accepted = true; return }
     if (ctrl && !shift && event.key === Qt.Key_U) { wrapSelection("<u>", "</u>"); event.accepted = true; return }
-    if (ctrl && !shift && event.key === Qt.Key_V) { edit.pasteRequested(); event.accepted = true; return }
+    // Only a block that answers pasteRequested (the text block, which can
+    // take an image) intercepts Ctrl+V; code and label values paste natively.
+    if (edit.handlesPaste && ctrl && !shift && event.key === Qt.Key_V) { edit.pasteRequested(); event.accepted = true; return }
+    if (ctrl && !shift && (event.key === Qt.Key_Home || event.key === Qt.Key_End)) { edit.edgeRequested(event.key === Qt.Key_End); event.accepted = true; return }
     if (ctrl || (event.modifiers & Qt.AltModifier)) return   // window-level shortcuts handle the rest
 
     if (edit.pickerActive) {
       if (event.key === Qt.Key_Up)   { edit.pickerMove(-1); event.accepted = true; return }
       if (event.key === Qt.Key_Down) { edit.pickerMove(1); event.accepted = true; return }
-      if (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier))  { edit.pickerMove(1); event.accepted = true; return }
+      if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) { edit.pickerMove(shift || event.key === Qt.Key_Backtab ? -1 : 1); event.accepted = true; return }
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { edit.pickerAccept(); event.accepted = true; return }
       if (event.key === Qt.Key_Escape) { edit.pickerCancel(); event.accepted = true; return }
     }
@@ -100,6 +105,6 @@ TextEdit {
     if (event.key === Qt.Key_Down && noSelection && edit.cursorRectangle.y + edit.cursorRectangle.height >= edit.contentHeight - 1) {
       edit.downAtEnd(); event.accepted = true; return
     }
-    if (event.key === Qt.Key_Tab && !(event.modifiers & Qt.ControlModifier)) { edit.tabPressed(); event.accepted = true; return }
+    if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) { edit.tabPressed(shift || event.key === Qt.Key_Backtab); event.accepted = true; return }
   }
 }

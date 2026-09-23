@@ -65,14 +65,25 @@ pub fn run_bounded(argv: &[&str], max: usize, deadline: Duration) -> Bounded {
         let r = stdout.take(max as u64 + 1).read_to_end(&mut buf);
         let _ = tx.send(r.map(|_| buf));
     });
+    let until = Instant::now() + deadline;
     match rx.recv_timeout(deadline) {
         Ok(Ok(buf)) if buf.len() > max => {
             kill_group(&mut child);
             Bounded::TooLarge
         }
-        Ok(Ok(buf)) => match child.wait() {
-            Ok(s) if s.success() => Bounded::Ok(buf),
-            _ => Bounded::Failed,
+        // stdout closed: the exit is waited for under the same deadline (a
+        // child that closes stdout and lingers would otherwise hold the caller).
+        Ok(Ok(buf)) => loop {
+            match child.try_wait() {
+                Ok(Some(s)) if s.success() => return Bounded::Ok(buf),
+                Ok(Some(_)) | Err(_) => return Bounded::Failed,
+                Ok(None) => {}
+            }
+            if Instant::now() >= until {
+                kill_group(&mut child);
+                return Bounded::TimedOut;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         },
         Ok(Err(_)) => {
             kill_group(&mut child);
@@ -85,10 +96,14 @@ pub fn run_bounded(argv: &[&str], max: usize, deadline: Duration) -> Bounded {
     }
 }
 
-/// Feeds `input` to `argv` on stdin (stdout and stderr discarded) and waits up
-/// to `deadline` for it to exit. A child that is still running afterwards is
-/// left alone and reaped in the background: wl-copy stays alive to serve the
-/// clipboard when built without forking, and killing it would empty it.
+/// Feeds `input` to `argv` on stdin (stdout and stderr discarded). Success
+/// means every byte was accepted: the write is waited for under `deadline`,
+/// and a child that exits before reading it all, or a stall, is an error
+/// (the group killed; wl-copy sets the selection only once it has read all
+/// of stdin, so nothing is lost). Only then is the exit waited for, for the
+/// rest of the deadline: a child still running is left alone and reaped in
+/// the background, since wl-copy stays alive to serve the clipboard when
+/// built without forking, and killing it would empty it.
 pub fn feed_detached(argv: &[&str], input: &[u8], deadline: Duration) -> Result<(), String> {
     let mut child = Command::new(argv[0])
         .args(&argv[1..])
@@ -102,18 +117,37 @@ pub fn feed_detached(argv: &[&str], input: &[u8], deadline: Duration) -> Result<
         .map_err(|e| format!("{}: {e}", argv[0]))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let owned = input.to_vec();
-    let mut writer = Some(std::thread::spawn(move || stdin.write_all(&owned).and_then(|_| stdin.flush())));
+    let writer = std::thread::spawn(move || stdin.write_all(&owned).and_then(|_| stdin.flush()));
     let until = Instant::now() + deadline;
-    let mut written = None;
-    while Instant::now() < until {
-        if writer.as_ref().is_some_and(|w| w.is_finished()) {
-            written = Some(writer.take().expect("checked").join().map_err(|_| "writer panicked".to_string())?);
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            if let Some(Err(e)) = written {
-                return Err(format!("{}: {e}", argv[0]));
+    // The writer's own result decides whether the input went in; a child
+    // that exits meanwhile is noted, not judged: the write may have finished
+    // just before, and if not the broken pipe ends the writer on its own.
+    let mut exited = None;
+    while !writer.is_finished() {
+        if exited.is_none() {
+            if let Ok(Some(status)) = child.try_wait() {
+                exited = Some(status);
             }
+        }
+        if Instant::now() >= until {
+            kill_group(&mut child);
+            return Err(format!("{} did not accept its input", argv[0]));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if let Err(e) = writer.join().map_err(|_| "writer panicked".to_string())? {
+        kill_group(&mut child);
+        return Err(match exited {
+            Some(status) => format!("{} exited with {status} before reading its input", argv[0]),
+            None => format!("{}: {e}", argv[0]),
+        });
+    }
+    loop {
+        if let Some(status) = exited.or_else(|| child.try_wait().ok().flatten()) {
             return if status.success() { Ok(()) } else { Err(format!("{} exited with {status}", argv[0])) };
+        }
+        if Instant::now() >= until {
+            break;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -287,6 +321,24 @@ mod tests {
     }
 
     #[test]
+    fn feed_detached_succeeds_only_when_the_input_was_accepted() {
+        let big = vec![b'x'; 1 << 20];
+        assert!(feed_detached(&["/usr/bin/cat"], &big, Duration::from_secs(5)).is_ok(), "read whole, exited 0");
+        assert!(feed_detached(&["/usr/bin/sh", "-c", "sleep 1; cat"], &big, Duration::from_secs(5)).is_ok(), "slow but complete");
+        for _ in 0..50 {
+            assert!(feed_detached(&["/usr/bin/true"], &big, Duration::from_secs(5)).is_err(), "exited without reading");
+        }
+        assert!(feed_detached(&["/usr/bin/head", "-c", "1"], &big, Duration::from_secs(5)).is_err(), "read a byte and left");
+        assert!(feed_detached(&["/usr/bin/false"], &big, Duration::from_secs(5)).is_err());
+        let t = Instant::now();
+        let stalled = feed_detached(&["/usr/bin/sh", "-c", "sleep 30; cat"], &big, Duration::from_millis(300));
+        assert!(stalled.unwrap_err().contains("did not accept"), "a stall is not a success");
+        assert!(t.elapsed() < Duration::from_secs(3), "the group was killed, not waited for");
+        assert!(feed_detached(&["/usr/bin/sh", "-c", "cat; sleep 30"], b"tiny", Duration::from_millis(300)).is_ok(), "accepted, then left serving");
+        assert!(feed_detached(&["/nonexistent/binary"], b"x", Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
     fn bounded_run_caps_bytes_and_time() {
         match run_bounded(&["/usr/bin/head", "-c", "10", "/dev/zero"], 100, Duration::from_secs(5)) {
             Bounded::Ok(b) => assert_eq!(b.len(), 10),
@@ -297,6 +349,9 @@ mod tests {
         assert!(matches!(run_bounded(&["/usr/bin/sleep", "30"], 10, Duration::from_millis(200)), Bounded::TimedOut));
         assert!(t.elapsed() < Duration::from_secs(3), "the group was killed, not waited for");
         assert!(matches!(run_bounded(&["/usr/bin/false"], 10, Duration::from_secs(5)), Bounded::Failed));
+        let t = Instant::now();
+        assert!(matches!(run_bounded(&["/usr/bin/sh", "-c", "echo hi; exec >&-; sleep 30"], 10, Duration::from_millis(300)), Bounded::TimedOut), "stdout closed, still running: the deadline holds");
+        assert!(t.elapsed() < Duration::from_secs(3));
         assert!(matches!(run_bounded(&["/nonexistent/binary"], 10, Duration::from_secs(5)), Bounded::Failed));
     }
 

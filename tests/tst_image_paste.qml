@@ -10,7 +10,10 @@ Item {
     id: imageStore
     property var reply: null
     property var saved: null
-    function clipboardImage(cb) { reply = cb }
+    property var icon: null
+    property var notes: ({ note: { id: "note", icon: "data:image/png;base64,AA==" } })
+    property var sources: []
+    function clipboardImage(list, titleIcon, cb) { sources = list; icon = titleIcon; reply = cb }
     function updateTab(id, patch) { saved = { id: id, patch: patch } }
     function updateNote(id, patch) { saved = { id: id, patch: patch } }
   }
@@ -20,6 +23,40 @@ Item {
     name: "ImagePasteTargeting"
     function init() { imageStore.reply = null; imageStore.saved = null; editor.tabId = "first" }
     function blocks() { editor.flush(); return JSON.parse(imageStore.saved.patch.contentBlocks) }
+
+    // The desktop edition charges an image title icon to the note body's
+    // pixel budget; the helper is handed it for the body, never for a tab,
+    // and an emoji icon is not an image.
+    function test_paste_hands_the_helper_the_notes_image_icon_for_the_body_only() {
+      editor.load('[{"type":"text","content":""}]')
+      editor.pasteImage(0, true, function() {})
+      compare(imageStore.icon, "", "a tab paste carries no icon")
+      imageStore.reply(null, null)
+      editor.tabId = ""
+      editor.pasteImage(0, true, function() {})
+      compare(imageStore.icon, "data:image/png;base64,AA==", "the body paste carries the icon")
+      imageStore.reply(null, null)
+      imageStore.notes = { note: { id: "note", icon: "\ud83d\ude00" } }
+      editor.pasteImage(0, true, function() {})
+      compare(imageStore.icon, "", "an emoji icon is no image")
+      imageStore.reply(null, null)
+      imageStore.notes = { note: { id: "note", icon: "data:image/png;base64,AA==" } }
+    }
+
+    // Blocks past the editor's cap are hidden but saved with the note, so
+    // their images are handed to the budget check like the visible ones.
+    function test_paste_counts_the_images_kept_past_the_block_cap() {
+      var all = []
+      for (var i = 0; i < editor.maxBlocks; i++) all.push({ type: "text", content: "t" + i })
+      all[3] = { type: "image", src: "data:image/png;base64,VISIBLE" }
+      all.push({ type: "image", src: "data:image/png;base64,HIDDEN" }, { type: "text", content: "tail" })
+      editor.load(JSON.stringify(all))
+      editor.pasteImage(0, false, function() {})
+      compare(imageStore.sources.length, 2)
+      verify(imageStore.sources.indexOf("data:image/png;base64,HIDDEN") !== -1, "the hidden image is charged")
+      imageStore.reply(null, null)
+      editor.load('[{"type":"text","content":""}]')
+    }
 
     function test_paste_after_tab_switch_is_dropped() {
       editor.load('[{"type":"text","content":""}]')

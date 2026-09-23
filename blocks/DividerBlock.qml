@@ -25,6 +25,7 @@ FocusScope {
 
   Keys.onPressed: function(event) {
     if (!row) return
+    if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) return
     switch (event.key) {
       case Qt.Key_Backspace: case Qt.Key_Delete: row.remove(); event.accepted = true; break
       case Qt.Key_Return: case Qt.Key_Enter: row.enter(); event.accepted = true; break

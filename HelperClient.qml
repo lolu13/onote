@@ -60,9 +60,10 @@ Item {
     proc.running = true
   }
 
-  // One reply line may carry every open note (each at most 5 MB) plus the
-  // stacked notes' metadata. A line past this budget is a protocol failure:
-  // the helper is restarted instead of the shell growing without bound.
+  // The helper keeps the bodies in one list reply under 8 MB (the rest are
+  // fetched one by one), and a single note or tab is at most 5 MB. A line
+  // past this budget is a protocol failure: the helper is restarted instead
+  // of the shell growing without bound.
   readonly property int maxLineBytes: 64 * 1024 * 1024
   property string _buf: ""
 
@@ -110,7 +111,7 @@ Item {
         console.log("onote-helper:", line)
         if (!client.ready && line.indexOf("ready on") !== -1) {
           client.ready = true
-          client.restarts = 0
+          healthyTimer.restart()
           client.becameReady()
         }
       }
@@ -119,6 +120,7 @@ Item {
     onExited: function(exitCode, exitStatus) {
       var wasReady = client.ready
       client.ready = false
+      healthyTimer.stop()
       client._buf = ""
       var reason = "helper exited (code " + exitCode + ")"
       client._failAll(reason)
@@ -138,6 +140,16 @@ Item {
     id: restartTimer
     repeat: false
     onTriggered: client.start()
+  }
+
+  // "ready" alone does not reset the restart budget: a helper that dies on
+  // its first reply (an oversized listNotes, say) would otherwise restart
+  // forever. Only a helper that stays up this long earns it back.
+  Timer {
+    id: healthyTimer
+    interval: 30000
+    repeat: false
+    onTriggered: client.restarts = 0
   }
 
   Component.onDestruction: {

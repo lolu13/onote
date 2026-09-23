@@ -6,6 +6,7 @@ o.window({ class = "^org.quickshell$", title = ".* — Onote \\[dn:[0-9a-f]+\\]$
 
 o.bind("SUPER + N", "Onote: notes and stack", "omarchy-shell shell toggle io.github.lolu13.onote")
 o.bind("SUPER + ALT + N", "Onote: new note", "omarchy-shell onote newNote")
-o.bind("SUPER + ALT + H", "Onote: stack all notes", "omarchy-shell onote hideAll")
+o.bind("SUPER + ALT + H", "Onote: hide focused note", "omarchy-shell onote hideNote")
+o.bind("SUPER + ALT + SHIFT + H", "Onote: hide all notes", "omarchy-shell onote hideAll")
 o.bind("SUPER + ALT + P", "Onote: pin note on every workspace", "omarchy-shell onote pinNote")
 o.bind("SUPER + ALT + V", "Onote: new note from clipboard", "omarchy-shell onote newNoteFromClipboard")
