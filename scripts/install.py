@@ -35,6 +35,10 @@ PLUGIN_SKIP = {".git", ".codex-artifacts", "__pycache__", "target"}
 # update check would then offer updates the updater cannot apply. A copy is
 # not a checkout; only the in-place install (from `omarchy plugin add`) is.
 PLUGIN_KEEP = ["helper/target"]
+# ...minus the helper it built: that binary belongs to the tree it replaces, and
+# a later flagless install from the destination would otherwise pick it up and
+# pair it with this tree's QML. The incremental build cache stays.
+PLUGIN_KEEP_DROP = ["helper/target/release/onote-helper"]
 SOURCE_LINE = 'dofile((os.getenv("XDG_CONFIG_HOME") or (os.getenv("HOME") .. "/.config")) .. "/hypr/onote.lua")'
 
 
@@ -66,6 +70,10 @@ def copy_plugin(dest: Path) -> bool:
                 (stage / rel).parent.mkdir(parents=True, exist_ok=True)
                 kept.rename(stage / rel)
                 moved.append(rel)
+        for rel in PLUGIN_KEEP_DROP:
+            stale = stage / rel
+            if stale.is_file() or stale.is_symlink():
+                stale.unlink()
         if dest.exists():
             shutil.rmtree(dest)
         stage.rename(dest)
