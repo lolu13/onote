@@ -4,7 +4,7 @@
 //! truth. Best effort: a failing write is logged and never fails the edit.
 use crate::db::{Database, Note, NoteTab};
 use crate::markdown;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 /// The same file under two spellings (`vault` and `vault/../vault`, a
@@ -192,6 +192,35 @@ pub fn finish_removal(path: Option<PathBuf>, note_id: &str) {
     }
 }
 
+/// A hard link when the filesystem has them (no copy), else a private copy
+/// on disk: exFAT and similar folders keep their rollback too.
+fn keep_backup(path: &Path, backup: &Path) -> Result<(), String> {
+    if std::fs::hard_link(path, backup).is_ok() {
+        return Ok(());
+    }
+    copy_backup(path, backup)
+}
+
+fn copy_backup(path: &Path, backup: &Path) -> Result<(), String> {
+    let mut from = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|e| format!("keep a copy of {}: {e}", path.display()))?;
+    let mut to = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(backup)
+        .map_err(|e| format!("keep a copy of {}: {e}", path.display()))?;
+    if let Err(e) = std::io::copy(&mut from, &mut to) {
+        let _ = std::fs::remove_file(backup);
+        return Err(format!("keep a copy of {}: {e}", path.display()));
+    }
+    Ok(())
+}
+
 /// Write every note. Errors are returned here because the user asked for it.
 /// Two phases, so a failure part-way leaves the previous mirror whole: every
 /// file is written first, nothing tracked or deleted yet; only once all of
@@ -221,8 +250,7 @@ pub fn sync_all(db: &Database) -> Result<usize, String> {
         let result = allocate_path(db, &dir, &note).and_then(|path| {
             let before = if std::fs::symlink_metadata(&path).is_ok() {
                 let backup = dir.join(format!(".onote-rollback.{}.md", uuid::Uuid::new_v4().simple()));
-                std::fs::hard_link(&path, &backup)
-                    .map_err(|e| format!("keep a copy of {}: {e}", path.display()))?;
+                keep_backup(&path, &backup)?;
                 Some(backup)
             } else {
                 None
@@ -408,6 +436,21 @@ mod tests {
         let mut v: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         v.sort();
         assert_eq!(v, vec!["Notes.md", "Plan a.md", "Plan.md"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The fallback for folders without hard links: a private copy, and a
+    // name already taken is refused rather than overwritten.
+    #[test]
+    fn a_backup_copy_is_private_and_never_overwrites() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, backup) = (dir.join("Alpha.md"), dir.join(".onote-rollback.x.md"));
+        std::fs::write(&file, "old contents").unwrap();
+        copy_backup(&file, &backup).unwrap();
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "old contents");
+        assert_eq!(std::fs::metadata(&backup).unwrap().mode() & 0o777, 0o600);
+        assert!(copy_backup(&file, &backup).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

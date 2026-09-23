@@ -423,8 +423,8 @@ FloatingWindow {
     case "library": win.saveAll(); win.openLibrary(); break
     case "settings": win.saveAll(); if (win.service) win.service.openSettings(); break
     case "save": win.saveAll(); break
-    case "copy": win.saveAll(); if (win.store) win.store.settled(win.noteId, function(e) { if (e) editor.notice = "Not copied: " + e; else win.store.copyMarkdown(win.noteId) }); break
-    case "export": win.saveAll(); if (win.store) win.store.settled(win.noteId, function(e) { if (e) editor.notice = "Not exported: " + e; else win.store.exportNote(win.noteId) }); break
+    case "copy": win.saveAll(); if (win.store) win.store.settled(win.noteId, function(e) { if (e) editor.notice = "Not copied: " + e; else win.store.copyMarkdown(win.noteId, function(err) { if (err) editor.notice = "Not copied: " + err }) }); break
+    case "export": win.saveAll(); if (win.store) win.store.settled(win.noteId, function(e) { if (e) editor.notice = "Not exported: " + e; else win.store.exportNote(win.noteId, function(err) { if (err) editor.notice = "Not exported: " + err }) }); break
     case "theme": win.cycleTheme(1); break
     case "bigger": win.setFontSize(win.fontSize + 1); break
     case "smaller": win.setFontSize(win.fontSize - 1); break
