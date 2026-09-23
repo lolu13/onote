@@ -622,6 +622,25 @@ Item {
       compare(store.getSetting("k", ""), "b")
     }
 
+    // A -> B -> A with a reload answered between: the first A's reply must
+    // not clear the last A's marker, or the reload installs B over it.
+    function test_a_repeated_setting_value_keeps_its_own_marker() {
+      store.setSetting("k", "a")
+      store.setSetting("k", "b")
+      store.reload()
+      store.setSetting("k", "a")
+      client.answer("setSetting", null, true)   // the first a
+      client.answer("setSetting", null, true)   // b
+      client.answer("listNotes", null, [store.notes.n])
+      client.answer("listTabs", null, [])
+      var old = {}; old.k = "b"
+      client.answer("listSettings", null, old)
+      client.answer("listThemes", null, [])
+      compare(store.getSetting("k", ""), "a", "the last write is still out: the reload keeps it")
+      client.answer("setSetting", null, true)
+      compare(store.getSetting("k", ""), "a")
+    }
+
     function test_bulk_stack_failure_is_reported() {
       var result = "unset"
       store.stackAll(function(err) { result = err })

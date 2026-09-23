@@ -201,15 +201,16 @@ pub fn finish_removal(path: Option<PathBuf>, note_id: &str) {
 pub fn sync_all(db: &Database) -> Result<usize, String> {
     let Some(dir) = dir(db) else { return Ok(0) };
     crate::fsutil::ensure_owned_dir(&dir)?;
-    // Ids only: the bodies are not held for the whole run. `before`: what the
-    // destination held when this run rewrote it (the note's tracked file, or
-    // its own untracked file reclaimed by front matter after the mirror was
-    // off), None for a file this run created.
-    let mut written: Vec<(String, PathBuf, Option<String>, Option<Vec<u8>>)> = Vec::new();
-    let rollback = |written: &[(String, PathBuf, Option<String>, Option<Vec<u8>>)]| {
+    // Ids only: the bodies are not held for the whole run. `before`: a hard
+    // link to what the destination held when this run rewrote it (the note's
+    // tracked file, or its own untracked file reclaimed by front matter after
+    // the mirror was off), None for a file this run created. The rewrite
+    // replaces the name, so the link keeps the old file on disk, not in memory.
+    let mut written: Vec<(String, PathBuf, Option<String>, Option<PathBuf>)> = Vec::new();
+    let rollback = |written: &[(String, PathBuf, Option<String>, Option<PathBuf>)]| {
         for (_, path, _, before) in written {
             match before {
-                Some(bytes) => { let _ = crate::fsutil::write_private_atomic(path, bytes); }
+                Some(backup) => { let _ = std::fs::rename(backup, path); }
                 None => { let _ = std::fs::remove_file(path); }
             }
         }
@@ -219,15 +220,19 @@ pub fn sync_all(db: &Database) -> Result<usize, String> {
         let old = db.mirror_path(&note.id)?;
         let result = allocate_path(db, &dir, &note).and_then(|path| {
             let before = if std::fs::symlink_metadata(&path).is_ok() {
-                // allocate_path only hands out a file we own; one that cannot
-                // be read back now could not be restored, so it is not touched.
-                Some(crate::fsutil::read_owned_head(&path, usize::MAX)
-                    .ok_or_else(|| format!("read {}: cannot keep a copy to restore", path.display()))?)
+                let backup = dir.join(format!(".onote-rollback.{}.md", uuid::Uuid::new_v4().simple()));
+                std::fs::hard_link(&path, &backup)
+                    .map_err(|e| format!("keep a copy of {}: {e}", path.display()))?;
+                Some(backup)
             } else {
                 None
             };
             let tabs = db.tabs_for(&note.id)?;
-            write_atomic(&path, &document(&note, &tabs))?;
+            let done = write_atomic(&path, &document(&note, &tabs));
+            if let Err(e) = done {
+                if let Some(b) = &before { let _ = std::fs::remove_file(b); }
+                return Err(e);
+            }
             Ok((path, before))
         });
         match result {
@@ -247,6 +252,11 @@ pub fn sync_all(db: &Database) -> Result<usize, String> {
     if let Err(e) = db.set_mirror_paths(&moves) {
         rollback(&written);
         return Err(e);
+    }
+    for (_, _, _, before) in &written {
+        if let Some(backup) = before {
+            let _ = std::fs::remove_file(backup);
+        }
     }
     // Only now, with the rows moved, do the old files go.
     for (id, path, old, _) in &written {
@@ -429,6 +439,8 @@ mod tests {
         assert!(dir.join("Beta.md").exists());
         assert!(file_belongs_to(&dir.join("Alpha.md"), "a"));
         assert_eq!(std::fs::read(dir.join("Alpha.md")).unwrap(), alpha_before, "rewritten, then restored whole");
+        let leftovers = |d: &Path| std::fs::read_dir(d).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with(".onote-rollback")).count();
+        assert_eq!(leftovers(&dir), 0, "no rollback copies left after a failed run");
         // The same failure on a fresh folder leaves nothing behind.
         let fresh = temp_dir();
         db.set_setting(SETTING, fresh.to_str().unwrap()).unwrap();
@@ -441,6 +453,10 @@ mod tests {
         }
         assert!(sync_all(&db).is_err());
         assert!(!fresh.join("Alpha.md").exists(), "created by the failed run: taken back");
+        std::fs::remove_file(fresh.join(format!("{stem}.md"))).unwrap();   // Gamma fits now
+        assert_eq!(sync_all(&db).unwrap(), 3);
+        assert_eq!(sync_all(&db).unwrap(), 3, "a resync rewrites the files it owns");
+        assert_eq!(leftovers(&fresh), 0, "no rollback copies left after a good run");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&fresh);
     }

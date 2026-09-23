@@ -1034,11 +1034,15 @@ Item {
 
   // A failed write stays pending like a note's (flush() and the retry timer
   // resend it), unless a newer value for the key went out after it.
+  // Each write is marked by its own revision, not its value: in A -> B -> A
+  // the first A's reply must not clear the last A's marker.
+  property int _settingRev: 0
   function _sendSetting(key) {
     var value = store.settings[key]
-    var sent = store._sentSettings; sent[key] = value; store._sentSettings = sent
+    var rev = ++store._settingRev
+    var sent = store._sentSettings; sent[key] = rev; store._sentSettings = sent
     store._call("setSetting", { key: key, value: value }, function(err) {
-      if (store._sentSettings[key] === value) { var s2 = store._sentSettings; delete s2[key]; store._sentSettings = s2 }
+      if (store._sentSettings[key] === rev) { var s2 = store._sentSettings; delete s2[key]; store._sentSettings = s2 }
       if (store.settings[key] !== value) return
       var d = store._dirtySettings
       if (err) d[key] = true; else delete d[key]
