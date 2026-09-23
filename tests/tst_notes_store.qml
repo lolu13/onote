@@ -691,6 +691,29 @@ Item {
       compare(store.noteById("n") !== null, true)
     }
 
+    function test_a_setting_retry_waits_for_a_deletion_in_flight() {
+      store.setSetting("note.n.title.t", "retried title")
+      client.answer("setSetting", "database is locked", null)
+      store.deleteNote("n")
+      store.flush()
+      compare(client.count("setSetting"), 1, "the retry is held, not sent behind the delete")
+      client.answer("deleteNote", null, true)
+      store.flush()
+      compare(client.count("setSetting"), 1, "the note is gone: the held retry goes with it")
+      compare(store._dirtySettings["note.n.title.t"], undefined)
+    }
+
+    function test_a_setting_retry_held_during_a_refused_deletion_is_written_after() {
+      store.setSetting("note.n.title.t", "retried title")
+      client.answer("setSetting", "database is locked", null)
+      store.deleteNote("n")
+      store.flush()
+      compare(client.count("setSetting"), 1)
+      client.answer("deleteNote", "database is locked", null)
+      compare(client.count("setSetting"), 2, "the deletion was refused: the retry goes")
+      compare(client.pending[client.pending.length - 1].args.value, "retried title")
+    }
+
     // The window undoes its close on this error: the cache must still say
     // open, and the error must reach the caller, even when the client fails
     // the request at once (helper down).

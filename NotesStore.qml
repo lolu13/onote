@@ -645,8 +645,13 @@ Item {
   function flush() {
     // A failed setting keeps its marker until a write of its value succeeds, so
     // a reload answered meanwhile cannot put the old value back.
+    // A retry for a note being deleted is held like a new write would be.
     var keys = Object.keys(store._dirtySettings)
-    for (var k = 0; k < keys.length; k++) store._sendSetting(keys[k])
+    for (var k = 0; k < keys.length; k++) {
+      if (store._holdForDeletion(keys[k], store.settings[keys[k]])) {
+        var ds = store._dirtySettings; delete ds[keys[k]]; store._dirtySettings = ds
+      } else store._sendSetting(keys[k])
+    }
     var tabIds = Object.keys(store._dirtyTabs)
     store._dirtyTabs = Object.create(null)
     for (var t = 0; t < tabIds.length; t++) store._sendTab(tabIds[t], store._tabRev[tabIds[t]] || 0)
@@ -964,9 +969,18 @@ Item {
     return (v === undefined || v === null || v === "") ? fallback : v
   }
 
-  function setSetting(key, value) {
+  // A note's setting written while the note's deletion is in flight is held
+  // until the outcome (see _deleting); true when it was.
+  function _holdForDeletion(key, value) {
     var m = /^note\.([^.]+)\./.exec(key)
-    if (m && store._deleting[m[1]]) { store._deleting[m[1]][key] = String(value); return }   // held until the outcome
+    if (!m || !store._deleting[m[1]]) return false
+    store._deleting[m[1]][key] = String(value)
+    return true
+  }
+
+  function setSetting(key, value) {
+    if (store._holdForDeletion(key, value)) return
+    var m = /^note\.([^.]+)\./.exec(key)
     if (m && !store.notes[m[1]]) return   // its note is gone
     var s = ({})
     for (var k in store.settings) s[k] = store.settings[k]
